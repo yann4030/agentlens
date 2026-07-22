@@ -192,18 +192,40 @@ function processLine(line: string): void {
 // ─── Tail activity polling ──────────────────────────
 
 let tailActivityTimer: NodeJS.Timeout | null = null;
-const TAIL_IDLE_MS = 10_000; // 10s without new lines => done
+const POLL_INTERVAL_MS = 5_000;
+const ACTIVE_TOOL_TIMEOUT = 120_000;   // 2m — tool running is fine
+const IDLE_TIMEOUT = 30_000;           // 30s — no new lines, no tool running => done
 
 function startTailActivityCheck(sessionPath: string): void {
   if (tailActivityTimer) clearInterval(tailActivityTimer);
   tailActivityTimer = setInterval(() => {
     const age = getFileAge(sessionPath);
-    const state = stateStore.getState();
-    // Only transition to done if file really isn't being written AND no tool is running
-    if (age > TAIL_IDLE_MS && !state.activeToolCall) {
+    const s = stateStore.getState();
+    const toolAge = s.activeToolCall ? Date.now() - (s.activeToolCall.timestamp || 0) : 0;
+
+    // Clock: if file hasn't been written in IDLE_TIMEOUT and no tool is running => DONE
+    if (age > IDLE_TIMEOUT && !s.activeToolCall) {
+      stateStore.setSessionStatus('done');
+      return;
+    }
+
+    // If file is being written, it's working
+    if (age < POLL_INTERVAL_MS) {
+      stateStore.setSessionStatus('working');
+      return;
+    }
+
+    // Check: long idle with active tool (potential orphan)
+    if (age > ACTIVE_TOOL_TIMEOUT && s.activeToolCall) {
+      stateStore.setSessionStatus('interrupted');
+      return;
+    }
+
+    // File idle > IDLE_TIMEOUT but still < activeToolTimeout with no tool => DONE
+    if (age > IDLE_TIMEOUT && !s.activeToolCall) {
       stateStore.setSessionStatus('done');
     }
-  }, 5000);
+  }, POLL_INTERVAL_MS);
 }
 
 // ─── Helpers ──────────────────────────────────────────
