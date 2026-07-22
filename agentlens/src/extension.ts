@@ -221,7 +221,19 @@ function startTailActivityCheck(sp: string): void {
     const age = getFileAge(sp);
     const s = stateStore.getState();
 
-    if (age < t.pollMs) { stateStore.setSessionStatus('working'); return; }
+    if (age < t.pollMs) {
+      stateStore.setSessionStatus('working');
+
+      // Auto-clear stale tasks: file just became active, but last TodoWrite is older
+      // than the session itself. This means a new session started using the same file.
+      const todoAge = s.lastTodoWriteAt ? Date.now() - s.lastTodoWriteAt : 0;
+      if (s.tasks.length > 0 && todoAge > t.staleTodoWrite) {
+        outputChannel.appendLine('[AutoClear] New session detected — clearing old tasks');
+        stateStore.clearTasks();
+      }
+
+      return;
+    }
     if (hasRunningTasks(s)) { stateStore.setSessionStatus('working'); return; }
     if (age > t.idleTimeout && !s.activeToolCall) { stateStore.setSessionStatus('done'); return; }
     if (age > t.activeToolTimeout && s.activeToolCall) { stateStore.setSessionStatus('interrupted'); return; }
