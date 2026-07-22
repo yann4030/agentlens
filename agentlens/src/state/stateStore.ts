@@ -96,21 +96,22 @@ export class StateStore {
   }
 
   setTasks(tasks: SubTask[], currentTaskIndex: number): void {
-    const merged = [...this.state.tasks];
-    for (const incoming of tasks) {
-      const idx = merged.findIndex((t) => t.id === incoming.id);
-      if (idx >= 0) {
-        merged[idx] = { ...merged[idx], status: incoming.status };
-        if (incoming.status === 'in_progress' && !merged[idx].startedAt) {
-          merged[idx] = { ...merged[idx], startedAt: incoming.startedAt };
-        }
-        if (incoming.status === 'completed') {
-          merged[idx] = { ...merged[idx], completedAt: incoming.completedAt || nowMs() };
-        }
-      } else {
-        merged.push(incoming);
-      }
-    }
+    // Latest TodoWrite is the authoritative task list — direct replace
+    const prevById = new Map(this.state.tasks.map((t) => [t.id, t]));
+    const prevByTitle = new Map(this.state.tasks.map((t) => [t.title, t]));
+
+    const merged = tasks.map((t) => {
+      const prev = prevById.get(t.id) || prevByTitle.get(t.title);
+      return {
+        ...t,
+        startedAt: t.status === 'in_progress'
+          ? (prev?.startedAt || t.startedAt || nowMs())
+          : (prev?.startedAt || t.startedAt),
+        completedAt: t.status === 'completed'
+          ? (prev?.completedAt || t.completedAt || nowMs())
+          : (prev?.completedAt || t.completedAt),
+      };
+    });
 
     for (let i = currentTaskIndex - 1; i >= 0; i--) {
       if (merged[i] && merged[i].status !== 'completed' && merged[i].status !== 'failed') {
