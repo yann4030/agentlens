@@ -239,12 +239,26 @@ function replayFileSync(filePath: string): void {
     const trimmed = line.trim();
     if (trimmed) processLine(trimmed);
   }
-  // If the session is already done, clear any orphan activeTool immediately
+
   const state = stateStore.getState();
+
+  // Clear orphan activeToolCall from finished sessions
   if (state.activeToolCall) {
     outputChannel.appendLine(`[Replay] Clearing presumed-done activeTool: ${state.activeToolCall.summary}`);
     stateStore.clearActiveTool();
   }
+
+  // If session looks stale (last heartbeat > 60s ago, no active tool),
+  // mark all in_progress tasks as completed so old session state doesn't show as "running"
+  const elapsed = Date.now() - state.watchdog.lastHeartbeat;
+  if (elapsed > 60_000 && !state.activeToolCall && state.tasks.some((t) => t.status === 'in_progress')) {
+    outputChannel.appendLine(`[Replay] Session ${Math.floor(elapsed / 1000)}s stale, auto-completing tasks`);
+    const cleaned = state.tasks.map((t) =>
+      t.status === 'in_progress' ? { ...t, status: 'completed' as const, completedAt: Date.now() } : t,
+    );
+    stateStore.setTasks(cleaned, cleaned.length);
+  }
+
   outputChannel.appendLine(`[Replay] ${lines.length} lines processed`);
 }
 
