@@ -148,13 +148,39 @@ function refreshSessionList(): void {
 function extractCwdFromSession(filePath: string): string | null {
   if (!fs.existsSync(filePath)) return null;
   const head = fs.readFileSync(filePath, { encoding: 'utf-8' });
-  const firstLine = head.split('\n')[0];
-  try {
-    const d = JSON.parse(firstLine);
-    return d.cwd || null;
-  } catch {
-    return null;
+  // CWD is often on line 2, not line 1. Scan first 10 lines.
+  const lines = head.split('\n');
+  for (let i = 0; i < Math.min(lines.length, 10); i++) {
+    try {
+      const d = JSON.parse(lines[i]);
+      if (d.cwd) return d.cwd;
+    } catch { /* skip */ }
   }
+  return null;
+}
+
+/** Find the session file whose cwd matches the currently active VS Code workspace. */
+function findSessionForWorkspace(): string | null {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  const workspaceCwd = workspaceFolder?.uri.fsPath;
+  if (!workspaceCwd) return null;
+
+  const allFiles = listAllSessionFiles();
+  for (const f of allFiles) {
+    const cwd = extractCwdFromSession(f);
+    if (cwd && normalizePath(cwd) === normalizePath(workspaceCwd)) {
+      outputChannel.appendLine(`[Match] Workspace "${workspaceCwd}" → session "${f}"`);
+      return f;
+    }
+  }
+
+  // Fallback: return latest if no workspace match
+  outputChannel.appendLine(`[Match] No workspace match for "${workspaceCwd}", falling back to latest`);
+  return findLatestSessionFile();
+}
+
+function normalizePath(p: string): string {
+  return path.normalize(p).replace(/\\/g, '/').toLowerCase();
 }
 
 function switchToSession(sessionPath: string): void {
@@ -172,11 +198,14 @@ function switchToSession(sessionPath: string): void {
 function startWatching(): void {
   stopTail();
 
-  const sessionPath = findLatestSessionFile();
+  // Match session to current VS Code workspace, not just latest globally
+  const sessionPath = findSessionForWorkspace();
   if (!sessionPath) {
-    vscode.window.showWarningMessage('AgentLens: No Claude Code session found.');
+    vscode.window.showWarningMessage('AgentLens: No Claude Code session found for this workspace.');
     return;
   }
+
+  outputChannel.appendLine(`[Start] Watching: ${sessionPath}`);
 
   fileGraph.reset();
   stateStore.reset(getProjectNameFromPath(sessionPath));
