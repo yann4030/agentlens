@@ -133,10 +133,32 @@ function findSessionForWorkspace(): string | null {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   const workspaceCwd = workspaceFolder?.uri.fsPath;
   if (!workspaceCwd) return findLatestSessionFile();
+
+  const normalizedWorkspace = normalizePath(workspaceCwd);
+
+  // Find ALL sessions matching this workspace, return the most recently modified
+  let best: string | null = null;
+  let bestMtime = 0;
+
   for (const f of listAllSessionFiles()) {
     const cwd = extractCwdFromSession(f);
-    if (cwd && normalizePath(cwd) === normalizePath(workspaceCwd)) return f;
+    if (cwd && normalizePath(cwd) === normalizedWorkspace) {
+      try {
+        const mtime = fs.statSync(f).mtimeMs;
+        if (mtime > bestMtime) {
+          bestMtime = mtime;
+          best = f;
+        }
+      } catch { /* skip */ }
+    }
   }
+
+  if (best) {
+    outputChannel.appendLine(`[Match] Workspace PICKED NEWEST: ${best}`);
+    return best;
+  }
+
+  outputChannel.appendLine(`[Match] No workspace match, falling back to latest`);
   return findLatestSessionFile();
 }
 
