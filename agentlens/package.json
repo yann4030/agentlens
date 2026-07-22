@@ -1,7 +1,7 @@
 {
   "name": "agentlens",
   "displayName": "AgentLens",
-  "description": "Real-time AI Agent monitor — task progress, tool feed, and watchdog alerts for Claude Code / Codex / Roo Code sessions.",
+  "description": "Real-time AI Agent monitor — task progress, tool feed, and watchdog alerts for Claude Code, Codex, Roo Code, and Cursor sessions.",
   "version": "1.0.0",
   "publisher": "agentlens",
   "engines": {
@@ -89,6 +89,7 @@
     "vscode:prepublish": "webpack --mode production",
     "compile": "webpack --mode development",
     "watch": "webpack --mode development --watch",
+    "package": "npx vsce package",
     "lint": "eslint src --ext ts,tsx"
   },
   "devDependencies": {
@@ -97,6 +98,7 @@
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.2",
     "css-loader": "^6.9.1",
     "style-loader": "^3.3.4",
     "ts-loader": "^9.5.1",

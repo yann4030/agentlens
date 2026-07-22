@@ -1,16 +1,34 @@
 {
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "type": "npm",
-      "script": "compile",
-      "group": {
-        "kind": "build",
-        "isDefault": true
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "type": "npm",
+        "script": "compile",
+        "group": { "kind": "build", "isDefault": true },
+        "problemMatcher": ["$ts-webpack", "$tsc"],
+        "label": "npm: compile"
       },
-      "problemMatcher": ["$ts-webpack", "$tsc"],
-      "label": "npm: compile",
-      "detail": "webpack --mode development"
-    }
-  ]
+      {
+        "type": "npm",
+        "script": "package",
+        "group": "build",
+        "problemMatcher": [],
+        "label": "npm: package"
+      }
+    ]
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Run AgentLens Extension",
+        "type": "extensionHost",
+        "request": "launch",
+        "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+        "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+        "preLaunchTask": "npm: compile"
+      }
+    ]
+  }
 }
