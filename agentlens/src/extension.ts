@@ -65,18 +65,22 @@ export function activate(context: vscode.ExtensionContext) {
   let lastLoopAlert = 0;
   let lastStallAlert = 0;
   stateStore.subscribe((change) => {
-    if (change.type !== 'watchdog_changed') return;
-    const w = stateStore.getState().watchdog;
-    const now = Date.now();
-    if (cfg().watchdogNotifications) {
-      if (w.loopDetected && now - lastLoopAlert > 60_000) {
-        lastLoopAlert = now;
-        vscode.window.showWarningMessage(`AgentLens: Loop detected — ${w.warningMessage || 'check the agent'}`, 'Dismiss');
+    if (change.type === 'watchdog_changed') {
+      const w = stateStore.getState().watchdog;
+      const now = Date.now();
+      if (cfg().watchdogNotifications) {
+        if (w.loopDetected && now - lastLoopAlert > 60_000) {
+          lastLoopAlert = now;
+          stateStore.bumpHealth('loop');
+          vscode.window.showWarningMessage(`AgentLens: Loop detected — ${w.warningMessage || 'check the agent'}`, 'Dismiss');
+        }
+        if (w.stallDetected && now - lastStallAlert > 60_000) {
+          lastStallAlert = now;
+          stateStore.bumpHealth('stall');
+          vscode.window.showWarningMessage(`AgentLens: Agent stalled — ${w.warningMessage || 'no recent output'}`, 'Dismiss');
+        }
       }
-      if (w.stallDetected && now - lastStallAlert > 60_000) {
-        lastStallAlert = now;
-        vscode.window.showWarningMessage(`AgentLens: Agent stalled — ${w.warningMessage || 'no recent output'}`, 'Dismiss');
-      }
+      return;
     }
   });
 
@@ -177,6 +181,7 @@ function processLine(line: string): void {
   if (result.tokens) stateStore.addTokens(result.tokens);
 
   if (event.type === 'tool_start') {
+    stateStore.bumpHealth('tool');
     const te = event.data as ToolCallEvent;
     const log = toolEventToLog(te);
     stateStore.setActiveTool(log);

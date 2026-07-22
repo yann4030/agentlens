@@ -418,6 +418,105 @@ body {
   font-family: monospace;
 }
 
+/* Insights panel */
+.insights-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.section-title {
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--fg-secondary);
+}
+
+/* Tool Usage Chart */
+.tool-usage {
+  padding: 0;
+}
+.tool-usage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 11px;
+}
+.tool-usage-name {
+  width: 55px;
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--accent);
+}
+.tool-usage-bar-wrap {
+  flex: 1;
+  height: 10px;
+  background: var(--bg-secondary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.tool-usage-bar {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  min-width: 2px;
+}
+.tool-usage-count {
+  width: 28px;
+  text-align: right;
+  font-family: monospace;
+  color: var(--fg-secondary);
+}
+
+/* Health Card */
+.health-card {
+  padding: 0;
+}
+.health-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.health-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+}
+.health-value {
+  font-size: 16px;
+  font-weight: 700;
+  font-family: monospace;
+}
+.health-label {
+  font-size: 9px;
+  color: var(--fg-secondary);
+  margin-top: 2px;
+}
+.health-score {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+}
+.health-score-label {
+  font-size: 11px;
+  color: var(--fg-secondary);
+}
+.health-score-value {
+  font-weight: 700;
+  font-size: 13px;
+}
+.health-Good { color: var(--success); }
+.health-Fair { color: var(--warning); }
+.health-Poor { color: var(--danger); }
+
 /* Empty state */
 .empty-state {
   text-align: center;
@@ -461,6 +560,31 @@ body {
 }
 .token-cache {
   color: #c586c0;
+}
+
+/* Token Sparkline */
+.token-sparkline {
+  display: flex;
+  align-items: flex-end;
+  height: 28px;
+  gap: 1px;
+  margin-top: 4px;
+}
+.token-spark-bar {
+  flex: 1;
+  min-width: 2px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 1px;
+}
+.spark-in {
+  background: #569cd6;
+  min-height: 1px;
+}
+.spark-out {
+  background: #4ec9b0;
+  min-height: 1px;
 }
 
 /* File List */

@@ -122,6 +122,11 @@ export class StateStore {
   }
 
   addTokens(t: { input: number; output: number; cacheRead: number; cacheCreation: number }): void {
+    const MAX_TIMELINE = 100;
+    const snap: import('../common/types').TokenSnapshot = {
+      ts: nowMs(), input: t.input, output: t.output, cacheRead: t.cacheRead,
+    };
+    const timeline = [...this.state.tokens.timeline, snap].slice(-MAX_TIMELINE);
     this.state = {
       ...this.state,
       tokens: {
@@ -129,9 +134,25 @@ export class StateStore {
         outputTokens: this.state.tokens.outputTokens + t.output,
         cacheReadTokens: this.state.tokens.cacheReadTokens + t.cacheRead,
         cacheCreationTokens: this.state.tokens.cacheCreationTokens + t.cacheCreation,
+        timeline,
       },
     };
     this.emit('tokens_updated', { tokens: this.state.tokens });
+  }
+
+  bumpHealth(kind: 'loop' | 'stall' | 'tool'): void {
+    const h = this.state.health;
+    this.state = {
+      ...this.state,
+      health: {
+        ...h,
+        loopCount: h.loopCount + (kind === 'loop' ? 1 : 0),
+        stallCount: h.stallCount + (kind === 'stall' ? 1 : 0),
+        toolCallCount: h.toolCallCount + (kind === 'tool' ? 1 : 0),
+        lastToolTime: kind === 'tool' ? nowMs() : h.lastToolTime,
+      },
+    };
+    this.emit('health_updated', { health: this.state.health });
   }
 
   setFiles(files: FileNode[]): void {
@@ -205,11 +226,12 @@ function makeInitialState(id: string): AgentSessionState {
       loopConfidence: 0,
       lastHeartbeat: nowMs(),
     },
-    tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+    tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, timeline: [] },
     files: [],
     availableSessions: [],
     currentSessionPath: '',
     sessionStatus: 'no_session',
     lastTodoWriteAt: 0,
+    health: { loopCount: 0, stallCount: 0, toolCallCount: 0, startTime: nowMs(), lastToolTime: 0 },
   };
 }

@@ -6,6 +6,8 @@ import { WatchdogBanner } from './components/WatchdogBanner';
 import { TokenBar } from './components/TokenBar';
 import { FileTree } from './components/FileTree';
 import { StatusBadge } from './components/StatusBadge';
+import { ToolUsageChart } from './components/ToolUsageChart';
+import { HealthCard } from './components/HealthCard';
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: unknown): void;
@@ -19,12 +21,13 @@ const EMPTY: AgentSessionState = {
   sessionId: '', projectName: '', startTime: 0, lastUpdatedTime: 0,
   currentTaskIndex: 0, tasks: [], recentTools: [],
   watchdog: { isNormal: true, loopDetected: false, stallDetected: false, loopConfidence: 0, lastHeartbeat: 0 },
-  tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+  tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, timeline: [] },
   files: [], availableSessions: [], currentSessionPath: '',
   sessionStatus: 'no_session', lastTodoWriteAt: 0,
+  health: { loopCount: 0, stallCount: 0, toolCallCount: 0, startTime: 0, lastToolTime: 0 },
 };
 
-type Tab = 'tasks' | 'tools' | 'files';
+type Tab = 'tasks' | 'tools' | 'files' | 'insights';
 
 export default function App() {
   const [state, setState] = useState<AgentSessionState>(EMPTY);
@@ -74,13 +77,13 @@ export default function App() {
       <TokenBar tokens={state.tokens} />
 
       <nav className="tab-bar">
-        {(['tasks', 'tools', 'files'] as Tab[]).map((tab) => (
+        {(['tasks', 'tools', 'files', 'insights'] as Tab[]).map((tab) => (
           <button
             key={tab}
             className={`tab ${activeView === tab ? 'tab-active' : ''}`}
             onClick={() => setActiveView(tab)}
           >
-            {tab === 'tasks' ? 'Tasks' : tab === 'tools' ? 'Tools' : 'Files'}
+            {{ tasks: 'Tasks', tools: 'Tools', files: 'Files', insights: 'Insights' }[tab]}
           </button>
         ))}
       </nav>
@@ -94,6 +97,12 @@ export default function App() {
         )}
         {activeView === 'files' && (
           <FileTree files={state.files} />
+        )}
+        {activeView === 'insights' && (
+          <div className="insights-panel">
+            <HealthCard health={state.health} />
+            <ToolUsageChart tools={state.recentTools} />
+          </div>
         )}
       </main>
     </div>

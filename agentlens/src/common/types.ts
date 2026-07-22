@@ -52,6 +52,14 @@ export interface TokenStats {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+  timeline: TokenSnapshot[];
+}
+
+export interface TokenSnapshot {
+  ts: number;
+  input: number;
+  output: number;
+  cacheRead: number;
 }
 
 export interface FileNode {
@@ -67,6 +75,14 @@ export interface SessionInfo {
   sessionId: string;
   mtime: number;
   label: string;
+}
+
+export interface SessionHealth {
+  loopCount: number;
+  stallCount: number;
+  toolCallCount: number;
+  startTime: number;
+  lastToolTime: number;
 }
 
 export interface AgentSessionState {
@@ -85,9 +101,10 @@ export interface AgentSessionState {
   currentSessionPath: string;
   sessionStatus: SessionStatus;
   lastTodoWriteAt: number;
+  health: SessionHealth;
 }
 
 export interface StateChange {
-  type: 'tasks_updated' | 'tool_started' | 'tool_ended' | 'heartbeat' | 'watchdog_changed' | 'session_reset' | 'tokens_updated' | 'files_updated' | 'sessions_list' | 'status_changed';
+  type: 'tasks_updated' | 'tool_started' | 'tool_ended' | 'heartbeat' | 'watchdog_changed' | 'session_reset' | 'tokens_updated' | 'files_updated' | 'sessions_list' | 'status_changed' | 'health_updated';
   partial: Partial<AgentSessionState>;
 }
