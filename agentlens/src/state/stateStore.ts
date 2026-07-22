@@ -1,4 +1,4 @@
-import type { AgentSessionState, ToolCallLog, SubTask, StateChange } from '../common/types';
+import type { AgentSessionState, ToolCallLog, SubTask, StateChange, TokenStats, FileNode, SessionInfo } from '../common/types';
 import { nowMs } from '../common/utils';
 import { LOOP_WINDOW_SIZE, MAX_RECENT_TOOLS } from '../common/constants';
 import { checkLoop, shouldAlert } from '../watchdog/loopDetector';
@@ -60,7 +60,6 @@ export class StateStore {
       return t;
     });
 
-    // If the result doesn't match any running tool, append it
     const hasMatch = this.state.recentTools.some(
       (t) => t.id === result.id || (t.status === 'running' && t.toolName === 'unknown'),
     );
@@ -94,7 +93,6 @@ export class StateStore {
       }
     }
 
-    // Auto-complete tasks before current
     for (let i = currentTaskIndex - 1; i >= 0; i--) {
       if (merged[i] && merged[i].status !== 'completed' && merged[i].status !== 'failed') {
         merged[i] = { ...merged[i], status: 'completed' };
@@ -105,8 +103,35 @@ export class StateStore {
     this.emit('tasks_updated', { tasks: this.state.tasks, currentTaskIndex });
   }
 
+  addTokens(t: { input: number; output: number; cacheRead: number; cacheCreation: number }): void {
+    this.state = {
+      ...this.state,
+      tokens: {
+        inputTokens: this.state.tokens.inputTokens + t.input,
+        outputTokens: this.state.tokens.outputTokens + t.output,
+        cacheReadTokens: this.state.tokens.cacheReadTokens + t.cacheRead,
+        cacheCreationTokens: this.state.tokens.cacheCreationTokens + t.cacheCreation,
+      },
+    };
+    this.emit('tokens_updated', { tokens: this.state.tokens });
+  }
+
+  setFiles(files: FileNode[]): void {
+    this.state = { ...this.state, files };
+    this.emit('files_updated', { files: this.state.files });
+  }
+
+  setSessions(sessions: SessionInfo[]): void {
+    this.state = { ...this.state, availableSessions: sessions };
+    this.emit('sessions_list', { availableSessions: sessions });
+  }
+
+  setCurrentSessionPath(p: string): void {
+    this.state = { ...this.state, currentSessionPath: p };
+  }
+
   reset(id: string): void {
-    this.state = makeInitialState(id);
+    this.state = { ...makeInitialState(id), currentSessionPath: this.state.currentSessionPath, availableSessions: this.state.availableSessions };
     this.emit('session_reset', {});
   }
 
@@ -163,5 +188,9 @@ function makeInitialState(id: string): AgentSessionState {
       loopConfidence: 0,
       lastHeartbeat: nowMs(),
     },
+    tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+    files: [],
+    availableSessions: [],
+    currentSessionPath: '',
   };
 }

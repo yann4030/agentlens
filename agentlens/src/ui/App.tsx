@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import type { AgentSessionState, StateChange, ToolCallLog, SubTask, WatchdogStatus } from '../common/types';
+import type { AgentSessionState } from '../common/types';
 import { TaskTree } from './components/TaskTree';
 import { ToolFeed } from './components/ToolFeed';
 import { WatchdogBanner } from './components/WatchdogBanner';
+import { TokenBar } from './components/TokenBar';
+import { FileTree } from './components/FileTree';
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: unknown): void;
@@ -12,43 +14,34 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 
-const initialState: AgentSessionState = {
-  sessionId: '',
-  projectName: '',
-  startTime: 0,
-  lastUpdatedTime: 0,
-  currentTaskIndex: 0,
-  tasks: [],
-  recentTools: [],
-  watchdog: {
-    isNormal: true,
-    loopDetected: false,
-    stallDetected: false,
-    loopConfidence: 0,
-    lastHeartbeat: 0,
-  },
+const EMPTY: AgentSessionState = {
+  sessionId: '', projectName: '', startTime: 0, lastUpdatedTime: 0,
+  currentTaskIndex: 0, tasks: [], recentTools: [],
+  watchdog: { isNormal: true, loopDetected: false, stallDetected: false, loopConfidence: 0, lastHeartbeat: 0 },
+  tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+  files: [], availableSessions: [], currentSessionPath: '',
 };
 
+type Tab = 'tasks' | 'tools' | 'files';
+
 export default function App() {
-  const [state, setState] = useState<AgentSessionState>(initialState);
-  const [activeView, setActiveView] = useState<'tasks' | 'tools'>('tasks');
+  const [state, setState] = useState<AgentSessionState>(EMPTY);
+  const [activeView, setActiveView] = useState<Tab>('tasks');
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
       const message = event.data;
-      if (message.type === 'state_init' || message.type === 'state_update') {
+      if (message.type === 'state_update' || message.type === 'state_init') {
         setState(message.payload as AgentSessionState);
       }
     };
-
     window.addEventListener('message', handler);
     vscode.postMessage({ command: 'ready' });
-
     return () => window.removeEventListener('message', handler);
   }, []);
 
   const completedCount = state.tasks.filter((t) => t.status === 'completed').length;
-  const inProgressCount = state.tasks.filter((t) => t.status === 'in_progress').length;
+  const totalTokens = state.tokens.inputTokens + state.tokens.outputTokens;
 
   return (
     <div className="app">
@@ -64,36 +57,40 @@ export default function App() {
       </header>
 
       <div className="stats-bar">
-        <span className="stat">
-          Tasks: {completedCount}/{state.tasks.length}
-        </span>
+        <span className="stat">Tasks: {completedCount}/{state.tasks.length}</span>
         {state.activeToolCall && (
           <span className="stat stat-active" title={state.activeToolCall.summary}>
             Running: {state.activeToolCall.toolName}
           </span>
         )}
+        {totalTokens > 0 && (
+          <span className="stat">{totalTokens.toLocaleString()} tokens</span>
+        )}
       </div>
 
+      <TokenBar tokens={state.tokens} />
+
       <nav className="tab-bar">
-        <button
-          className={`tab ${activeView === 'tasks' ? 'tab-active' : ''}`}
-          onClick={() => setActiveView('tasks')}
-        >
-          Tasks
-        </button>
-        <button
-          className={`tab ${activeView === 'tools' ? 'tab-active' : ''}`}
-          onClick={() => setActiveView('tools')}
-        >
-          Tools
-        </button>
+        {(['tasks', 'tools', 'files'] as Tab[]).map((tab) => (
+          <button
+            key={tab}
+            className={`tab ${activeView === tab ? 'tab-active' : ''}`}
+            onClick={() => setActiveView(tab)}
+          >
+            {tab === 'tasks' ? 'Tasks' : tab === 'tools' ? 'Tools' : 'Files'}
+          </button>
+        ))}
       </nav>
 
       <main className="main-content">
-        {activeView === 'tasks' ? (
+        {activeView === 'tasks' && (
           <TaskTree tasks={state.tasks} currentTaskIndex={state.currentTaskIndex} />
-        ) : (
+        )}
+        {activeView === 'tools' && (
           <ToolFeed tools={state.recentTools} activeTool={state.activeToolCall} />
+        )}
+        {activeView === 'files' && (
+          <FileTree files={state.files} />
         )}
       </main>
     </div>

@@ -15,53 +15,73 @@ interface RawRecord {
 
 type JsonlBlock = Record<string, unknown>;
 
-export function parseJsonlLine(line: string): AgentEvent | null {
+export interface ParseResult {
+  event: AgentEvent | null;
+  tokens?: { input: number; output: number; cacheRead: number; cacheCreation: number };
+}
+
+export function parseJsonlLine(line: string): ParseResult {
   try {
     const raw: RawRecord = JSON.parse(line);
     const timestamp = nowMs();
-    const sessionId = raw.sessionId || raw.session_id || '';
-    const recordType = raw.type || '';
+    const sessionId = (raw.sessionId as string) || (raw.session_id as string) || '';
+    const recordType = (raw.type as string) || '';
+
+    let tokens: ParseResult['tokens'] | undefined;
 
     if (recordType === 'system') {
-      return makeEvent('session_start', sessionId, timestamp, { cwd: raw.cwd, model: raw.model });
+      return { event: makeEvent('session_start', sessionId, timestamp, { cwd: raw.cwd, model: raw.model }), tokens };
     }
 
     if (recordType === 'assistant') {
-      return parseAssistant(raw, sessionId, timestamp);
+      const result = parseAssistant(raw, sessionId, timestamp);
+      tokens = result.tokens;
+      return { event: result.event, tokens };
     }
 
     if (recordType === 'user') {
-      return parseUser(raw, sessionId, timestamp);
+      return { event: parseUser(raw, sessionId, timestamp), tokens };
     }
 
-    return null;
+    return { event: null, tokens };
   } catch {
-    return null;
+    return { event: null, tokens: undefined };
   }
 }
 
-function parseAssistant(raw: RawRecord, sessionId: string, timestamp: number): AgentEvent | null {
+function extractTokens(msg: Record<string, unknown>): ParseResult['tokens'] {
+  const usage = msg.usage as Record<string, number> | undefined;
+  if (!usage) return undefined;
+  return {
+    input: usage.input_tokens || 0,
+    output: usage.output_tokens || 0,
+    cacheRead: usage.cache_read_input_tokens || 0,
+    cacheCreation: usage.cache_creation_input_tokens || 0,
+  };
+}
+
+function parseAssistant(raw: RawRecord, sessionId: string, timestamp: number): { event: AgentEvent | null; tokens?: ParseResult['tokens'] } {
   const msg = raw.message;
-  if (!msg || typeof msg !== 'object') return null;
+  if (!msg || typeof msg !== 'object') return { event: null };
 
   const content = msg.content;
-  if (!Array.isArray(content)) return null;
+  const tokens = extractTokens(msg);
 
-  // Check for tool_use blocks — these are the key events
+  if (!Array.isArray(content)) return { event: null, tokens };
+
   for (const block of content) {
     if (!isBlock(block)) continue;
     if (block.type === 'tool_use') {
-      return makeEvent('tool_start', sessionId, timestamp, buildToolCallEvent(block, 'tool_start', timestamp));
+      return { event: makeEvent('tool_start', sessionId, timestamp, buildToolCallEvent(block, 'tool_start', timestamp)), tokens };
     }
   }
 
-  // No tool_use — still a valid heartbeat (thinking or text response)
   const hasThinking = content.some((b) => isBlock(b) && b.type === 'thinking');
   if (hasThinking) {
-    return makeEvent('heartbeat', sessionId, timestamp, { kind: 'thinking' });
+    return { event: makeEvent('heartbeat', sessionId, timestamp, { kind: 'thinking' }), tokens };
   }
 
-  return null;
+  return { event: null, tokens };
 }
 
 function parseUser(raw: RawRecord, sessionId: string, timestamp: number): AgentEvent | null {
@@ -102,11 +122,16 @@ function buildToolCallEvent(block: JsonlBlock, type: 'tool_start' | 'tool_end', 
     id: (block.id as string) || shortId(),
     toolName: name,
     summary: buildSummary(name, input),
-    filePath: input ? (input.file_path as string) || (input.path as string) || undefined : undefined,
+    filePath: extractPath(input),
     command: input ? (input.command as string) || undefined : undefined,
     timestamp,
     raw: block,
   };
+}
+
+function extractPath(input?: Record<string, unknown>): string | undefined {
+  if (!input) return undefined;
+  return (input.file_path as string) || (input.path as string) || undefined;
 }
 
 function buildSummary(name: string, input?: Record<string, unknown>): string {

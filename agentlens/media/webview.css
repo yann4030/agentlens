@@ -309,3 +309,86 @@ body {
   opacity: 0.6;
   margin-top: 4px;
 }
+
+/* Token Bar */
+.token-bar {
+  padding: 4px 12px 6px;
+}
+.token-bar-fill {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-secondary);
+  display: flex;
+  overflow: hidden;
+}
+.token-fill-input {
+  background: #569cd6;
+  transition: width 0.3s ease;
+}
+.token-fill-output {
+  background: #4ec9b0;
+  transition: width 0.3s ease;
+}
+.token-labels {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+.token-label {
+  font-size: 10px;
+  color: var(--fg-secondary);
+  opacity: 0.7;
+}
+.token-cache {
+  color: #c586c0;
+}
+
+/* File List */
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+.file-item:hover {
+  background: var(--bg-secondary);
+}
+.file-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.file-dot-edited {
+  background: var(--warning);
+}
+.file-dot-read {
+  background: var(--accent);
+}
+.file-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+  font-size: 11px;
+}
+.file-stats {
+  display: flex;
+  gap: 8px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.file-edits {
+  color: var(--warning);
+}
+.file-relations {
+  color: var(--accent);
+}
