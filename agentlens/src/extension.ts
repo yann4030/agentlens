@@ -97,6 +97,7 @@ function startWatching(): void {
   }
 
   startTail(sessionPath);
+  startTailActivityCheck(sessionPath);
 }
 
 function findSessionForWorkspace(): string | null {
@@ -118,6 +119,7 @@ function findSessionForWorkspace(): string | null {
 
 function stopTail(): void {
   if (tailStream) { tailStream.stop(); tailStream = null; }
+  if (tailActivityTimer) { clearInterval(tailActivityTimer); tailActivityTimer = null; }
 }
 
 function startTail(sessionPath: string): void {
@@ -152,6 +154,9 @@ function processLine(line: string): void {
   // Heartbeat from event's own timestamp (not wall clock)
   stateStore.setHeartbeat(event.timestamp);
 
+  // File is being written: session is definitely working
+  stateStore.setSessionStatus('working');
+
   if (result.tokens) stateStore.addTokens(result.tokens);
 
   if (event.type === 'tool_start') {
@@ -182,6 +187,23 @@ function processLine(line: string): void {
     const log = toolEventToLog(toolEvent);
     stateStore.completeActiveTool(log);
   }
+}
+
+// ─── Tail activity polling ──────────────────────────
+
+let tailActivityTimer: NodeJS.Timeout | null = null;
+const TAIL_IDLE_MS = 10_000; // 10s without new lines => done
+
+function startTailActivityCheck(sessionPath: string): void {
+  if (tailActivityTimer) clearInterval(tailActivityTimer);
+  tailActivityTimer = setInterval(() => {
+    const age = getFileAge(sessionPath);
+    const state = stateStore.getState();
+    // Only transition to done if file really isn't being written AND no tool is running
+    if (age > TAIL_IDLE_MS && !state.activeToolCall) {
+      stateStore.setSessionStatus('done');
+    }
+  }, 5000);
 }
 
 // ─── Helpers ──────────────────────────────────────────
