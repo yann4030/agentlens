@@ -248,13 +248,18 @@ function replayFileSync(filePath: string): void {
     stateStore.clearActiveTool();
   }
 
-  // If session looks stale (last heartbeat > 60s ago, no active tool),
-  // mark all in_progress AND pending tasks as completed
-  const elapsed = Date.now() - state.watchdog.lastHeartbeat;
-  if (elapsed > 60_000 && !state.activeToolCall && state.tasks.length > 0) {
+  // Only auto-complete tasks if BOTH conditions hold:
+  // 1. Last heartbeat > 60s ago (no recent activity in JSONL)
+  // 2. File itself hasn't been modified in > 60s (agent not actively writing)
+  const heartbeatAge = Date.now() - state.watchdog.lastHeartbeat;
+  let fileAge = 0;
+  try { fileAge = Date.now() - fs.statSync(filePath).mtimeMs; } catch { /* ok */ }
+  const isTrulyStale = heartbeatAge > 60_000 && fileAge > 60_000;
+
+  if (isTrulyStale && !state.activeToolCall && state.tasks.length > 0) {
     const stale = state.tasks.filter((t) => t.status !== 'completed' && t.status !== 'failed');
     if (stale.length > 0) {
-      outputChannel.appendLine(`[Replay] Session ${Math.floor(elapsed / 1000)}s stale, auto-completing ${stale.length} tasks`);
+      outputChannel.appendLine(`[Replay] Truly stale (heartbeat=${Math.floor(heartbeatAge/1000)}s, file=${Math.floor(fileAge/1000)}s), auto-completing ${stale.length} tasks`);
       const cleaned = state.tasks.map((t) =>
         t.status === 'completed' || t.status === 'failed' ? t : { ...t, status: 'completed' as const, completedAt: Date.now() },
       );
