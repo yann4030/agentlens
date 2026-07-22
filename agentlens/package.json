@@ -1,0 +1,68 @@
+{
+  "name": "agentlens",
+  "displayName": "AgentLens",
+  "description": "Real-time AI Agent monitor — task progress, tool feed, and watchdog alerts for Claude Code / Codex / Roo Code sessions.",
+  "version": "1.0.0",
+  "publisher": "agentlens",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "activationEvents": [
+    "onView:agentlens.sidebar"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentlens",
+          "title": "AgentLens",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "agentlens": [
+        {
+          "id": "agentlens.sidebar",
+          "name": "Agent Monitor",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "agentlens.refresh",
+        "title": "AgentLens: Refresh View"
+      },
+      {
+        "command": "agentlens.clearHistory",
+        "title": "AgentLens: Clear History"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "webpack --mode production",
+    "compile": "webpack --mode development",
+    "watch": "webpack --mode development --watch",
+    "lint": "eslint src --ext ts,tsx"
+  },
+  "devDependencies": {
+    "@types/chokidar": "^1.7.5",
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.2.48",
+    "@types/react-dom": "^18.2.18",
+    "@types/vscode": "^1.85.0",
+    "css-loader": "^6.9.1",
+    "style-loader": "^3.3.4",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.3.3",
+    "webpack": "^5.90.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}
