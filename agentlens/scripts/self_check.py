@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
-"""AgentLens self-check script — validates session lifecycle against extension logic.
+"""AgentLens self-check script — mirrors extension.ts invariants.
 
-Reads from extension.ts source to stay in sync:
-  const POLL_INTERVAL_MS = 5_000;
-  const IDLE_TIMEOUT = 30_000;
-  const ACTIVE_TOOL_TIMEOUT = 120_000;
-"""
-
+Reads live Claude Code session data and validates AgentLens logic."""
 import json, os, time
-
+from datetime import datetime, timezone
 
 BASE = os.path.expandvars(r"%USERPROFILE%\.claude\projects")
 
-# Must match extension.ts (auto-parsed for correctness)
-POLL_INTERVAL_MS = 5_000
-IDLE_TIMEOUT = 30_000
-ACTIVE_TOOL_TIMEOUT = 120_000
+# Must match extension.ts constants
+POLL_MS = 5_000          # tail activity check interval
+IDLE_TIMEOUT = 60_000    # 60s idle → DONE
+ACTIVE_TOOL_TIMEOUT = 120_000  # 2m with stuck tool → INTERRUPTED
+FILE_STALE = 300_000     # 5 min no writes → truly stale
+TODO_STALE = 120_000     # 2 min since last TodoWrite → clear old tasks
 
 
 def get_sessions():
@@ -36,7 +33,6 @@ def get_sessions():
 def read_session(fp):
     with open(fp, encoding="utf-8") as f:
         lines = [json.loads(l) for l in f.readlines()]
-
     cwd = "?"
     sid = "?"
     for d in lines[:20]:
@@ -44,14 +40,12 @@ def read_session(fp):
             cwd = d["cwd"]
             sid = d.get("sessionId", "?")
             break
-
     last_ts = None
     for d in reversed(lines):
         ts = d.get("timestamp", None)
         if ts and ts != "":
             last_ts = ts
             break
-
     return lines, cwd, sid, last_ts
 
 
@@ -77,10 +71,8 @@ def last_tool_state(lines):
             if isinstance(b, dict) and b.get("type") == "tool_use":
                 last_use = b
                 last_use_idx = i
-
     if last_use is None:
         return None
-
     has_result = False
     for i in range(last_use_idx, len(lines)):
         ct = lines[i].get("message", {}).get("content", [])
@@ -90,32 +82,47 @@ def last_tool_state(lines):
             if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") == last_use["id"]:
                 has_result = True
                 break
-
     return last_use["name"], has_result, last_use["id"]
 
 
 def heartbeat_age(last_ts_str):
-    """Seconds from last event timestamp to now."""
     if not last_ts_str:
         return None
     try:
-        from datetime import datetime, timezone
         dt = datetime.fromisoformat(last_ts_str.replace("Z", "+00:00"))
         return (datetime.now(timezone.utc) - dt).total_seconds()
     except Exception:
         return None
 
 
-def determine_status(file_age, hb_age):
-    """Replicate extension.ts startWatching() logic."""
-    if hb_age is None:
-        hb_age = float("inf")
+def has_running_tasks(todos):
+    """Mirrors extension.ts hasRunningTasks()"""
+    if not todos:
+        return False
+    return any(t["status"] in ("in_progress", "pending") for t in todos)
 
-    if file_age < IDLE_TIMEOUT / 1000 or hb_age < IDLE_TIMEOUT / 1000:
-        is_new_session = file_age < IDLE_TIMEOUT / 1000 and hb_age > 300  # 5 min
-        return "NEW" if is_new_session else "WORKING", is_new_session
-    else:
-        return "DONE", False
+
+def determine_status_logically(file_age, hb_age, todos):
+    """Exact logic from extension.ts startWatching() + tailActivityCheck()"""
+    running = has_running_tasks(todos) if todos else False
+
+    # If file untouched > 5 min → DONE unconditionally
+    if file_age > FILE_STALE / 1000:
+        return "DONE"
+
+    # If tasks are running → WORKING
+    if running:
+        return "WORKING"
+
+    # If file is being written → WORKING
+    if file_age < POLL_MS / 1000:
+        return "WORKING"
+
+    # No running tasks, no activity → DONE
+    if file_age > IDLE_TIMEOUT / 1000:
+        return "DONE"
+
+    return "WORKING"
 
 
 def main():
@@ -123,9 +130,9 @@ def main():
     now = time.time()
 
     print("=" * 60)
-    print("  AGENTLENS  SELF-CHECK")
+    print("  AGENTLENS  SELF-CHECK (v3)")
     print("=" * 60)
-    print(f"  Thresholds: idle={IDLE_TIMEOUT//1000}s  active_tool={ACTIVE_TOOL_TIMEOUT//1000}s  poll={POLL_INTERVAL_MS//1000}s")
+    print(f"  Thresholds: idle={IDLE_TIMEOUT//1000}s  stale={FILE_STALE//1000}s  poll={POLL_MS//1000}s")
     print()
 
     issues = []
@@ -138,49 +145,51 @@ def main():
 
         lines, cwd, sid, last_ts = read_session(fp)
         sid8 = sid[:8] if len(sid) > 8 else sid
-        hb_age = heartbeat_age(last_ts)
+        hb_age = heartbeat_age(last_ts) if last_ts else float("inf")
 
-        estatus, is_new = determine_status(age, hb_age)
-        results.append((estatus, cwd, sid8, age, lines))
+        todo = last_todo_write(lines)
+        todos = todo[1] if todo else None
+        todo_pos = todo[0] if todo else None
+        distance_from_end = len(lines) - todo_pos if todo_pos is not None else float("inf")
+
+        # Determine status using EXACT AgentLens logic
+        status = determine_status_logically(age, hb_age, todos)
+        results.append((status, cwd, sid8, age, lines))
 
         label = os.path.basename(cwd) if cwd != "?" else os.path.basename(os.path.dirname(fp))
 
-        todo = last_todo_write(lines)
+        # Task summary
         todo_str = "NONE"
-        if todo:
-            ti, todos = todo
+        if todos:
             sc = {}
             for t in todos:
                 sc[t["status"]] = sc.get(t["status"], 0) + 1
-            todo_str = f"L{ti}: {len(todos)} tasks {sc}"
+            todo_str = f"L{todo_pos}: {len(todos)} tasks {sc} ({len(lines)-todo_pos} lines from end)"
 
+        # Tool state
         tool = last_tool_state(lines)
         tool_str = "none"
         if tool:
             nm, ok, tid = tool
             tool_str = f"{nm}({tid[:12]}...) — {'OK' if ok else 'ORPHAN'}"
 
-        new_tag = " (NEW)" if is_new else ""
-        print(f"  [{estatus}{new_tag}] {label}")
-        print(f"    file {age:.0f}s ago  hb {hb_age:.0f}s ago  lines {len(lines)}")
+        running = has_running_tasks(todos)
+
+        print(f"  [{status}] {label}")
+        print(f"    file {age:.0f}s ago  hb {hb_age if hb_age else 0:.0f}s ago  lines {len(lines)}")
         print(f"    tasks: {todo_str}")
         print(f"    tool:  {tool_str}")
+        print(f"    running_tasks: {running}")
 
-        # Issues
-        if estatus == "NEW" and todo and len(todo[1]) > 0:
-            issues.append(f"{label}: NEW session but TodoWrite from old session still loaded")
-        if estatus == "WORKING" and todo and len(todo[1]) == 0:
-            pass  # normal: cleared after all done
-        if estatus == "WORKING" and todo and len(todo[1]) > 0:
-            has_running = any(t["status"] in ("in_progress", "pending") for t in todo[1])
-            if not has_running:
-                issues.append(f"{label}: WORKING but all tasks completed — agent may have cleared TodoWrite")
-        if estatus == "DONE" and todo and len(todo[1]) > 0:
-            has_running = any(t["status"] in ("in_progress", "pending") for t in todo[1])
-            if has_running:
-                issues.append(f"{label}: DONE with running tasks — auto-complete should fire")
-        if tool and not tool[1] and estatus == "WORKING":
-            issues.append(f"{label}: WORKING with orphan tool (no result)")
+        # Consistency checks
+        if status == "DONE" and running:
+            issues.append(f"{label}: DONE but has running tasks")
+
+        if status == "WORKING" and not running and todo_pos and distance_from_end > 50:
+            issues.append(f"{label}: WORKING but all tasks done (stale TodoWrite)")
+
+        if tool and not tool[1] and age < POLL_MS / 1000:
+            issues.append(f"{label}: WORKING with orphan tool (may be running)")
 
         print()
 
