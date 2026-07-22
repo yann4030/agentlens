@@ -210,6 +210,12 @@ function replayFileSync(filePath: string): void {
     const trimmed = line.trim();
     if (trimmed) processLine(trimmed);
   }
+  // If the session is already done, clear any orphan activeTool immediately
+  const state = stateStore.getState();
+  if (state.activeToolCall) {
+    outputChannel.appendLine(`[Replay] Clearing presumed-done activeTool: ${state.activeToolCall.summary}`);
+    stateStore.clearActiveTool();
+  }
   outputChannel.appendLine(`[Replay] ${lines.length} lines processed`);
 }
 
