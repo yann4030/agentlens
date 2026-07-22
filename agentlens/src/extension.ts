@@ -78,10 +78,18 @@ function startWatching(): void {
   const fileAge = getFileAge(sessionPath);
   const heartbeatAge = Date.now() - state.watchdog.lastHeartbeat;
 
+  // If file is active but heartbeat is stale (>5min), this is a NEW session
+  // using the same file. Clear old tasks — Claude Code hasn't issued TodoWrite yet.
+  const isNewSession = fileAge < 30_000 && heartbeatAge > 300_000;
+
   if (fileAge < 30_000 || heartbeatAge < 30_000) {
-    // File is active: session is RUNNING
-    // Tasks are from latest TodoWrite — keep as-is (they're live)
-    stateStore.setSessionStatus('working');
+    if (isNewSession) {
+      outputChannel.appendLine('[Start] New session detected — clearing stale tasks');
+      stateStore.reset('');
+      stateStore.setSessionStatus('working');
+    } else {
+      stateStore.setSessionStatus('working');
+    }
   } else {
     // File is stale: session FINISHED
     // Mark all non-completed tasks as done, clear active tool
