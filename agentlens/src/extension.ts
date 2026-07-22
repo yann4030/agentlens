@@ -249,14 +249,17 @@ function replayFileSync(filePath: string): void {
   }
 
   // If session looks stale (last heartbeat > 60s ago, no active tool),
-  // mark all in_progress tasks as completed so old session state doesn't show as "running"
+  // mark all in_progress AND pending tasks as completed
   const elapsed = Date.now() - state.watchdog.lastHeartbeat;
-  if (elapsed > 60_000 && !state.activeToolCall && state.tasks.some((t) => t.status === 'in_progress')) {
-    outputChannel.appendLine(`[Replay] Session ${Math.floor(elapsed / 1000)}s stale, auto-completing tasks`);
-    const cleaned = state.tasks.map((t) =>
-      t.status === 'in_progress' ? { ...t, status: 'completed' as const, completedAt: Date.now() } : t,
-    );
-    stateStore.setTasks(cleaned, cleaned.length);
+  if (elapsed > 60_000 && !state.activeToolCall && state.tasks.length > 0) {
+    const stale = state.tasks.filter((t) => t.status !== 'completed' && t.status !== 'failed');
+    if (stale.length > 0) {
+      outputChannel.appendLine(`[Replay] Session ${Math.floor(elapsed / 1000)}s stale, auto-completing ${stale.length} tasks`);
+      const cleaned = state.tasks.map((t) =>
+        t.status === 'completed' || t.status === 'failed' ? t : { ...t, status: 'completed' as const, completedAt: Date.now() },
+      );
+      stateStore.setTasks(cleaned, cleaned.length);
+    }
   }
 
   outputChannel.appendLine(`[Replay] ${lines.length} lines processed`);
