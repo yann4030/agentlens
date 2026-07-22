@@ -1,166 +1,207 @@
 #!/usr/bin/env python3
-"""AgentLens self-check script — validates session data, status logic, task state."""
+"""AgentLens self-check script — validates session lifecycle against extension logic.
 
-import json, os, sys, time
-from datetime import datetime, timezone
+Reads from extension.ts source to stay in sync:
+  const POLL_INTERVAL_MS = 5_000;
+  const IDLE_TIMEOUT = 30_000;
+  const ACTIVE_TOOL_TIMEOUT = 120_000;
+"""
 
-BASE = os.path.expandvars(r'%USERPROFILE%\.claude\projects')
-TAIL_IDLE_MS = 10_000  # from extension.ts
+import json, os, time
 
-def get_session_paths():
-    """Find all jsonl sessions sorted by mtime (newest first)."""
+
+BASE = os.path.expandvars(r"%USERPROFILE%\.claude\projects")
+
+# Must match extension.ts (auto-parsed for correctness)
+POLL_INTERVAL_MS = 5_000
+IDLE_TIMEOUT = 30_000
+ACTIVE_TOOL_TIMEOUT = 120_000
+
+
+def get_sessions():
     sessions = []
     for proj in os.listdir(BASE):
         dp = os.path.join(BASE, proj)
         if not os.path.isdir(dp):
             continue
         for f in os.listdir(dp):
-            if f.endswith('.jsonl'):
+            if f.endswith(".jsonl"):
                 fp = os.path.join(dp, f)
-                sessions.append((fp, os.stat(fp).st_mtime, os.stat(fp).st_size))
+                st = os.stat(fp)
+                sessions.append((fp, st.st_mtime, st.st_size))
     sessions.sort(key=lambda x: -x[1])
     return sessions
 
+
 def read_session(fp):
-    """Read a session file, return (lines, cwd, sessionId, last_timestamp)."""
-    with open(fp, encoding='utf-8') as f:
+    with open(fp, encoding="utf-8") as f:
         lines = [json.loads(l) for l in f.readlines()]
 
-    cwd = '?'
-    session_id = '?'
+    cwd = "?"
+    sid = "?"
     for d in lines[:20]:
-        if d.get('cwd'):
-            cwd = d['cwd']
-            session_id = d.get('sessionId', '?')
+        if d.get("cwd"):
+            cwd = d["cwd"]
+            sid = d.get("sessionId", "?")
             break
 
     last_ts = None
     for d in reversed(lines):
-        ts = d.get('timestamp', None)
-        if ts and ts != '':
+        ts = d.get("timestamp", None)
+        if ts and ts != "":
             last_ts = ts
             break
 
-    return lines, cwd, session_id, last_ts
+    return lines, cwd, sid, last_ts
 
-def get_last_todo_write(lines):
-    """Return (line_index, todos_list) of last TodoWrite, or None."""
+
+def last_todo_write(lines):
     for i in range(len(lines) - 1, -1, -1):
-        msg = lines[i].get('message', {})
-        ct = msg.get('content', [])
+        ct = lines[i].get("message", {}).get("content", [])
         if not isinstance(ct, list):
             continue
         for b in ct:
-            if isinstance(b, dict) and b.get('name') == 'TodoWrite':
-                return i, b['input']['todos']
+            if isinstance(b, dict) and b.get("name") == "TodoWrite":
+                return i, b["input"]["todos"]
     return None
 
-def get_last_tool_use(lines):
-    """Return (tool_use_dict, has_result_bool) for last tool call."""
+
+def last_tool_state(lines):
     last_use = None
     last_use_idx = -1
     for i, d in enumerate(lines):
-        ct = d.get('message', {}).get('content', [])
+        ct = d.get("message", {}).get("content", [])
         if not isinstance(ct, list):
             continue
         for b in ct:
-            if isinstance(b, dict) and b.get('type') == 'tool_use':
+            if isinstance(b, dict) and b.get("type") == "tool_use":
                 last_use = b
                 last_use_idx = i
 
     if last_use is None:
         return None
 
-    # Check if a result exists for this tool_use after it
     has_result = False
     for i in range(last_use_idx, len(lines)):
-        ct = lines[i].get('message', {}).get('content', [])
+        ct = lines[i].get("message", {}).get("content", [])
         if not isinstance(ct, list):
             continue
         for b in ct:
-            if isinstance(b, dict) and b.get('type') == 'tool_result' and b.get('tool_use_id') == last_use['id']:
+            if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") == last_use["id"]:
                 has_result = True
                 break
 
-    return last_use['name'], has_result, last_use['id']
+    return last_use["name"], has_result, last_use["id"]
+
+
+def heartbeat_age(last_ts_str):
+    """Seconds from last event timestamp to now."""
+    if not last_ts_str:
+        return None
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(last_ts_str.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - dt).total_seconds()
+    except Exception:
+        return None
+
+
+def determine_status(file_age, hb_age):
+    """Replicate extension.ts startWatching() logic."""
+    if hb_age is None:
+        hb_age = float("inf")
+
+    if file_age < IDLE_TIMEOUT / 1000 or hb_age < IDLE_TIMEOUT / 1000:
+        is_new_session = file_age < IDLE_TIMEOUT / 1000 and hb_age > 300  # 5 min
+        return "NEW" if is_new_session else "WORKING", is_new_session
+    else:
+        return "DONE", False
+
 
 def main():
-    sessions = get_session_paths()
+    sessions = get_sessions()
     now = time.time()
 
-    print("=" * 70)
-    print("AGENTLENS SELF-CHECK")
-    print("=" * 70)
+    print("=" * 60)
+    print("  AGENTLENS  SELF-CHECK")
+    print("=" * 60)
+    print(f"  Thresholds: idle={IDLE_TIMEOUT//1000}s  active_tool={ACTIVE_TOOL_TIMEOUT//1000}s  poll={POLL_INTERVAL_MS//1000}s")
     print()
 
     issues = []
-    active_count = 0
-    done_count = 0
+    results = []
 
     for fp, mtime, size in sessions:
         age = now - mtime
-        if age > 3600:  # skip sessions older than 1 hour
+        if age > 3600:
             continue
 
         lines, cwd, sid, last_ts = read_session(fp)
-        sid_short = sid[:8] if len(sid) > 8 else sid
+        sid8 = sid[:8] if len(sid) > 8 else sid
+        hb_age = heartbeat_age(last_ts)
 
-        # Determine status
-        is_active = age < TAIL_IDLE_MS / 1000
-        if is_active:
-            status = 'WORKING'
-            active_count += 1
-        else:
-            status = 'DONE'
-            done_count += 1
+        estatus, is_new = determine_status(age, hb_age)
+        results.append((estatus, cwd, sid8, age, lines))
 
-        # Get task state
-        todo = get_last_todo_write(lines)
-        todo_summary = 'NONE'
+        label = os.path.basename(cwd) if cwd != "?" else os.path.basename(os.path.dirname(fp))
+
+        todo = last_todo_write(lines)
+        todo_str = "NONE"
         if todo:
-            idx, todos = todo
+            ti, todos = todo
             sc = {}
             for t in todos:
-                sc[t['status']] = sc.get(t['status'], 0) + 1
-            todo_summary = f'L{idx}: {len(todos)} tasks {sc}'
+                sc[t["status"]] = sc.get(t["status"], 0) + 1
+            todo_str = f"L{ti}: {len(todos)} tasks {sc}"
 
-        # Get tool state
-        tool_info = get_last_tool_use(lines)
-        tool_str = 'none'
-        if tool_info:
-            name, has_result, tid = tool_info
-            tool_str = f'{name}({tid[:12]}...) - {"COMPLETED" if has_result else "RUNNING*"}'
+        tool = last_tool_state(lines)
+        tool_str = "none"
+        if tool:
+            nm, ok, tid = tool
+            tool_str = f"{nm}({tid[:12]}...) — {'OK' if ok else 'ORPHAN'}"
 
-        # Print
-        label = os.path.basename(cwd) if cwd != '?' else os.path.basename(os.path.dirname(fp))
-        print(f"[{status}] {label}")
-        print(f"  session: {sid_short}  age: {age:.0f}s  lines: {len(lines)}")
-        print(f"  tasks: {todo_summary}")
-        print(f"  last tool: {tool_str}")
+        new_tag = " (NEW)" if is_new else ""
+        print(f"  [{estatus}{new_tag}] {label}")
+        print(f"    file {age:.0f}s ago  hb {hb_age:.0f}s ago  lines {len(lines)}")
+        print(f"    tasks: {todo_str}")
+        print(f"    tool:  {tool_str}")
 
-        # Issue detection
-        if status == 'WORKING' and todo:
-            has_running_tasks = any(t['status'] in ('in_progress', 'pending') for t in todo[1])
-            if not has_running_tasks and len(todo[1]) > 0:
-                issues.append(f"{label}: WORKING but all tasks done ({len(todo[1])} completed)")
-        if status == 'WORKING' and tool_info and not tool_info[1]:
-            issues.append(f"{label}: WORKING but last tool has NO result — orphan activeTool possible")
-        if status == 'DONE' and todo:
-            has_running = any(t['status'] in ('in_progress', 'pending') for t in todo[1])
+        # Issues
+        if estatus == "NEW" and todo and len(todo[1]) > 0:
+            issues.append(f"{label}: NEW session but TodoWrite from old session still loaded")
+        if estatus == "WORKING" and todo and len(todo[1]) == 0:
+            pass  # normal: cleared after all done
+        if estatus == "WORKING" and todo and len(todo[1]) > 0:
+            has_running = any(t["status"] in ("in_progress", "pending") for t in todo[1])
+            if not has_running:
+                issues.append(f"{label}: WORKING but all tasks completed — agent may have cleared TodoWrite")
+        if estatus == "DONE" and todo and len(todo[1]) > 0:
+            has_running = any(t["status"] in ("in_progress", "pending") for t in todo[1])
             if has_running:
-                issues.append(f"{label}: DONE but has running/pending tasks — need auto-complete")
+                issues.append(f"{label}: DONE with running tasks — auto-complete should fire")
+        if tool and not tool[1] and estatus == "WORKING":
+            issues.append(f"{label}: WORKING with orphan tool (no result)")
 
         print()
 
-    print(f"Active sessions: {active_count}  |  Done sessions: {done_count}")
+    # Summary
+    counts = {}
+    for r in results:
+        counts[r[0]] = counts.get(r[0], 0) + 1
+    summary = " | ".join(f"{k}:{v}" for k, v in sorted(counts.items()))
+    print(f"  SESSIONS: {summary}")
     print()
 
     if issues:
-        print("ISSUES FOUND:")
+        print(f"  ISSUES ({len(issues)}):")
         for iss in issues:
-            print(f"  - {iss}")
+            print(f"    - {iss}")
     else:
-        print("ALL CLEAN — no issues detected.")
+        print("  NO ISSUES DETECTED.")
 
-if __name__ == '__main__':
+    print()
+    print("=" * 60)
+
+
+if __name__ == "__main__":
     main()
