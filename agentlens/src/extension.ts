@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import * as readline from 'readline';
+import * as path from 'path';
 import { findLatestSessionFile, getProjectNameFromPath, listAllSessionFiles } from './watcher/logFinder';
 import { TailStream } from './watcher/tailStream';
 import { parseJsonlLine, toolEventToLog, extractTasksFromToolEvent } from './parser/jsonlParser';
@@ -9,7 +9,6 @@ import { FileGraph } from './parser/fileGraph';
 import { StateStore } from './state/stateStore';
 import { SidebarProvider } from './views/sidebarProvider';
 import type { ToolCallEvent, SessionInfo } from './common/types';
-import * as path from 'path';
 
 let stateStore: StateStore;
 let tailStream: TailStream | null = null;
@@ -165,23 +164,19 @@ function extractCwdFromSession(filePath: string): string | null {
 }
 
 function switchToSession(sessionPath: string): void {
-  if (tailStream) tailStream.stop();
+  stopTail();
   fileGraph.reset();
   stateStore.reset(getProjectNameFromPath(sessionPath));
   stateStore.setCurrentSessionPath(sessionPath);
 
-  replayExistingFile(sessionPath);
-
-  tailStream = new TailStream(sessionPath);
-  tailStream.on('line', (line: string) => processLine(line));
-  tailStream.on('error', (err: Error) => outputChannel.appendLine(`[Error] ${err.message}`));
-  tailStream.start();
+  replayFileSync(sessionPath);
+  startTail(sessionPath);
 
   outputChannel.appendLine(`[Session] Switched to ${sessionPath}`);
 }
 
 function startWatching(): void {
-  if (tailStream) tailStream.stop();
+  stopTail();
 
   const sessionPath = findLatestSessionFile();
   if (!sessionPath) {
@@ -194,23 +189,34 @@ function startWatching(): void {
   stateStore.setCurrentSessionPath(sessionPath);
   refreshSessionList();
 
-  replayExistingFile(sessionPath);
+  replayFileSync(sessionPath);
+  startTail(sessionPath);
+}
 
+function stopTail(): void {
+  if (tailStream) {
+    tailStream.stop();
+    tailStream = null;
+  }
+}
+
+function startTail(sessionPath: string): void {
   tailStream = new TailStream(sessionPath);
   tailStream.on('line', (line: string) => processLine(line));
   tailStream.on('error', (err: Error) => outputChannel.appendLine(`[Error] ${err.message}`));
   tailStream.start();
 }
 
-function replayExistingFile(filePath: string): void {
+/** Read entire file synchronously, process every line, THEN return. No race with tail. */
+function replayFileSync(filePath: string): void {
   if (!fs.existsSync(filePath)) return;
-
-  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-
-  rl.on('line', (line: string) => processLine(line));
-  rl.on('close', () => outputChannel.appendLine('[Replay] File replay complete'));
-  rl.on('error', (err: Error) => outputChannel.appendLine(`[Replay Error] ${err.message}`));
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const lines = content.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed) processLine(trimmed);
+  }
+  outputChannel.appendLine(`[Replay] ${lines.length} lines processed`);
 }
 
 function processLine(line: string): void {
