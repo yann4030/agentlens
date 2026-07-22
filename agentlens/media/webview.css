@@ -114,6 +114,9 @@ body {
 .status-icon {
   font-size: 12px;
 }
+.status-icon {
+  font-size: 12px;
+}
 @keyframes status-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.7; }
