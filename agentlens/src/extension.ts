@@ -18,9 +18,9 @@ let lastWatchdogAlert = { stall: false, loop: false, toolRunning: false };
 let stallCheckInterval: NodeJS.Timeout | null = null;
 
 const STALL_CHECK_MS = 5000;
-const STALL_WARN_ACTIVE_TOOL_MS = 300_000; // 5 min — tool is running, be patient
-const STALL_WARN_IDLE_MS = 60_000;          // 1 min — nothing happening at all
-const STALL_CRITICAL_MS = 600_000;          // 10 min — really stuck
+const STALL_WARN_ACTIVE_TOOL_MS = 120_000; // 2 min — tool running, be patient
+const STALL_AUTO_CLEAR_ACTIVE_MS = 300_000; // 5 min — auto-clear orphan activeToolCall
+const STALL_WARN_IDLE_MS = 60_000;           // 1 min — nothing happening at all
 
 export function activate(context: vscode.ExtensionContext) {
   stateStore = new StateStore();
@@ -87,11 +87,17 @@ function checkForStall(): void {
   const elapsed = Date.now() - state.watchdog.lastHeartbeat;
   const hasActiveTool = !!state.activeToolCall;
 
+  // Auto-clear orphan activeToolCall when agent is clearly done
+  if (hasActiveTool && elapsed > STALL_AUTO_CLEAR_ACTIVE_MS) {
+    outputChannel.appendLine(`[Stall] Auto-clearing orphan activeTool "${state.activeToolCall!.summary}" after ${Math.floor(elapsed / 1000)}s`);
+    stateStore.clearActiveTool();
+  }
+
   if (hasActiveTool && elapsed > STALL_WARN_ACTIVE_TOOL_MS && !lastWatchdogAlert.toolRunning) {
     lastWatchdogAlert.toolRunning = true;
     const minutes = Math.floor(elapsed / 60000);
     vscode.window.showWarningMessage(
-      `AgentLens: "${state.activeToolCall!.summary}" has been running for ${minutes}min. May be stalled.`,
+      `AgentLens: "${state.activeToolCall!.summary}" has been running for ${minutes}min.`,
       'Dismiss',
     );
   }
@@ -99,28 +105,16 @@ function checkForStall(): void {
   if (!hasActiveTool && elapsed > STALL_WARN_IDLE_MS && !lastWatchdogAlert.stall) {
     lastWatchdogAlert.stall = true;
     vscode.window.showWarningMessage(
-      `AgentLens: Agent idle for ${Math.floor(elapsed / 1000)}s. No tool running.`,
+      `AgentLens: Agent idle for ${Math.floor(elapsed / 1000)}s.`,
       'Dismiss',
     );
   }
 
-  if (elapsed > STALL_CRITICAL_MS && !lastWatchdogAlert.toolRunning && !lastWatchdogAlert.stall) {
-    vscode.window.showErrorMessage(
-      `AgentLens: Agent completely unresponsive for ${Math.floor(elapsed / 60000)}min. Consider restarting.`,
-      'Restart Session',
-    );
-  }
-
-  // Reset flags when heartbeat recovers
   if (elapsed < 5000) {
     if (lastWatchdogAlert.stall) lastWatchdogAlert.stall = false;
-    if (lastWatchdogAlert.toolRunning) {
-      lastWatchdogAlert.toolRunning = false;
-      vscode.window.showInformationMessage('AgentLens: Tool completed, agent is back.');
-    }
+    if (lastWatchdogAlert.toolRunning) lastWatchdogAlert.toolRunning = false;
   }
 
-  // Force-update watchdog status for UI banner
   stateStore.evaluateStall(elapsed, hasActiveTool);
 }
 

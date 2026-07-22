@@ -79,6 +79,22 @@ export class StateStore {
     this.reevaluateWatchdogAndEmit();
   }
 
+  /** Clear orphan activeToolCall when no matching tool_result arrives after timeout */
+  clearActiveTool(): void {
+    if (!this.state.activeToolCall) return;
+    const tools = this.state.recentTools.map((t) => {
+      if (t.status === 'running') return { ...t, status: 'success' as const };
+      return t;
+    });
+    this.state = {
+      ...this.state,
+      lastUpdatedTime: nowMs(),
+      activeToolCall: undefined,
+      recentTools: tools,
+    };
+    this.reevaluateWatchdogAndEmit();
+  }
+
   setTasks(tasks: SubTask[], currentTaskIndex: number): void {
     const merged = [...this.state.tasks];
     for (const incoming of tasks) {

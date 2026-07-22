@@ -1,5 +1,4 @@
-import type { SubTask, ToolCallLog } from '../common/types';
-import { shortId } from '../common/utils';
+import type { SubTask } from '../common/types';
 
 export function buildTaskTree(
   tasksFromTodoWrite: SubTask[],
@@ -12,31 +11,25 @@ export function buildTaskTree(
     return emptyTaskTree();
   }
 
-  const currentIdx = tasksFromTodoWrite.findIndex((t) => t.status === 'in_progress');
+  const merged = mergeTasks(existingTasks, tasksFromTodoWrite);
+
+  const currentIdx = merged.findIndex((t) => t.status === 'in_progress');
   return {
-    tasks: tasksFromTodoWrite,
-    currentTaskIndex: currentIdx >= 0 ? currentIdx : 0,
+    tasks: merged,
+    currentTaskIndex: currentIdx >= 0 ? currentIdx : merged.length - 1,
   };
 }
 
 function emptyTaskTree(): { tasks: SubTask[]; currentTaskIndex: number } {
-  return {
-    tasks: [
-      {
-        id: shortId(),
-        title: 'Agent Session',
-        status: 'in_progress',
-        startedAt: Date.now(),
-      },
-    ],
-    currentTaskIndex: 0,
-  };
+  return { tasks: [], currentTaskIndex: 0 };
 }
 
-export function mergeTasks(prev: SubTask[], next: SubTask[]): SubTask[] {
-  const prevMap = new Map(prev.map((t) => [t.id, t]));
-  for (const task of next) {
-    const existing = prevMap.get(task.id);
+function mergeTasks(prev: SubTask[], incoming: SubTask[]): SubTask[] {
+  const prevById = new Map(prev.map((t) => [t.id, t]));
+  const prevByContent = new Map(prev.map((t) => [t.title, t]));
+
+  for (const task of incoming) {
+    const existing = prevById.get(task.id) || prevByContent.get(task.title);
     if (existing) {
       existing.status = task.status;
       if (task.status === 'in_progress' && !existing.startedAt) {
@@ -46,8 +39,8 @@ export function mergeTasks(prev: SubTask[], next: SubTask[]): SubTask[] {
         existing.completedAt = task.completedAt || Date.now();
       }
     } else {
-      prevMap.set(task.id, task);
+      prevById.set(task.id, { ...task });
     }
   }
-  return Array.from(prevMap.values());
+  return Array.from(prevById.values());
 }
