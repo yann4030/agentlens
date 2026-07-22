@@ -8,7 +8,7 @@ import { buildTaskTree } from './parser/taskExtractor';
 import { FileGraph } from './parser/fileGraph';
 import { StateStore } from './state/stateStore';
 import { SidebarProvider } from './views/sidebarProvider';
-import type { ToolCallEvent, SessionInfo } from './common/types';
+import type { ToolCallEvent, SessionInfo, AgentSessionState } from './common/types';
 
 let stateStore: StateStore;
 let tailStream: TailStream | null = null;
@@ -41,7 +41,11 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       const sessions = buildSessionList(allFiles);
-      const items = sessions.map((s) => ({ label: s.label, description: s.sessionId.slice(0, 8) + '...', detail: s.path }));
+      const items = sessions.map((s) => ({
+        label: s.label,
+        description: s.sessionId.slice(0, 8) + '...',
+        detail: s.path,
+      }));
       const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Select a session' });
       if (picked) switchToSession(picked.detail);
     }),
@@ -50,11 +54,17 @@ export function activate(context: vscode.ExtensionContext) {
 
   startWatching();
   refreshSessionList();
-
   vscode.window.showInformationMessage('AgentLens activated');
 }
 
-// ─── Session matching ────────────────────────────────
+// ─── Session lifecycle ───────────────────────────────
+//
+//   no_session → [session found] → working
+//   working    → [idle + no tasks + no tool] → done
+//   working    → [idle + stuck tool > 2m] → interrupted
+//
+// Task state guards session state: if any task is in_progress or pending,
+// the session stays "working" regardless of file activity.
 
 function startWatching(): void {
   stopTail();
@@ -66,38 +76,23 @@ function startWatching(): void {
     return;
   }
 
-  outputChannel.appendLine(`[Start] Watching: ${sessionPath}`);
+  outputChannel.appendLine(`[Start] ${sessionPath}`);
   stateStore.setCurrentSessionPath(sessionPath);
   refreshSessionList();
 
-  // Replay the entire file to capture current state
   replayFileSync(sessionPath);
 
-  // After replay, determine session status
   const state = stateStore.getState();
   const fileAge = getFileAge(sessionPath);
-  const heartbeatAge = Date.now() - state.watchdog.lastHeartbeat;
   const todoAge = state.lastTodoWriteAt ? Date.now() - state.lastTodoWriteAt : 0;
 
-  // If file hasn't been touched in > 5 min, explicitly stale => DONE
-  const isTrulyStale = fileAge > 300_000;
-
-  // If the last TodoWrite is > 2 min old, clear old tasks
-  // Don't touch active tool state
-  const hasStaleTodoWrite = state.tasks.length > 0 && todoAge > 120_000;
-
-  if (isTrulyStale) {
+  if (fileAge > 300_000) {
+    // File untouched for > 5 min → truly done
     stateStore.setSessionStatus('done');
     if (state.activeToolCall) stateStore.clearActiveTool();
-    const hasRunning = state.tasks.some((t) => t.status !== 'completed' && t.status !== 'failed');
-    if (hasRunning) {
-      const cleaned = state.tasks.map((t) =>
-        t.status === 'completed' || t.status === 'failed' ? t : { ...t, status: 'completed' as const, completedAt: Date.now() },
-      );
-      stateStore.setTasks(cleaned, cleaned.length);
-    }
-  } else if (hasStaleTodoWrite) {
-    outputChannel.appendLine('[Start] Old TodoWrite — clearing tasks (waiting for new)');
+    if (hasRunningTasks(state)) setAllTasksDone();
+  } else if (state.tasks.length > 0 && todoAge > 120_000) {
+    // Old completed TodoWrite, new session using same file → clear
     stateStore.clearTasks();
     stateStore.setSessionStatus('working');
   } else {
@@ -108,30 +103,29 @@ function startWatching(): void {
   startTailActivityCheck(sessionPath);
 }
 
+// ─── Workspace matching ──────────────────────────────
+
 function findSessionForWorkspace(): string | null {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   const workspaceCwd = workspaceFolder?.uri.fsPath;
   if (!workspaceCwd) return findLatestSessionFile();
 
-  const allFiles = listAllSessionFiles();
-  for (const f of allFiles) {
+  for (const f of listAllSessionFiles()) {
     const cwd = extractCwdFromSession(f);
-    if (cwd && normalizePath(cwd) === normalizePath(workspaceCwd)) {
-      return f;
-    }
+    if (cwd && normalizePath(cwd) === normalizePath(workspaceCwd)) return f;
   }
   return findLatestSessionFile();
 }
 
-// ─── Tail / Replay ────────────────────────────────────
+// ─── I/O ─────────────────────────────────────────────
 
 function stopTail(): void {
   if (tailStream) { tailStream.stop(); tailStream = null; }
   if (tailActivityTimer) { clearInterval(tailActivityTimer); tailActivityTimer = null; }
 }
 
-function startTail(sessionPath: string): void {
-  tailStream = new TailStream(sessionPath);
+function startTail(sp: string): void {
+  tailStream = new TailStream(sp);
   tailStream.on('line', (line: string) => processLine(line));
   tailStream.on('error', (err: Error) => outputChannel.appendLine(`[Error] ${err.message}`));
   tailStream.start();
@@ -148,7 +142,7 @@ function replayFileSync(filePath: string): void {
   outputChannel.appendLine(`[Replay] ${lines.length} lines`);
 }
 
-// ─── Event processing ─────────────────────────────────
+// ─── Event pipeline ──────────────────────────────────
 
 function processLine(line: string): void {
   const result = parseJsonlLine(line);
@@ -158,115 +152,98 @@ function processLine(line: string): void {
   }
 
   const event = result.event;
-
-  // Heartbeat from event's own timestamp (not wall clock)
   stateStore.setHeartbeat(event.timestamp);
-
-  // File is being written: session is definitely working
   stateStore.setSessionStatus('working');
 
   if (result.tokens) stateStore.addTokens(result.tokens);
 
   if (event.type === 'tool_start') {
-    const toolEvent = event.data as ToolCallEvent;
-    const log = toolEventToLog(toolEvent);
+    const te = event.data as ToolCallEvent;
+    const log = toolEventToLog(te);
     stateStore.setActiveTool(log);
 
-    if (toolEvent.filePath) {
-      if (['Write', 'Edit'].includes(toolEvent.toolName)) {
-        fileGraph.recordEdit(toolEvent.filePath);
+    if (te.filePath) {
+      if (['Write', 'Edit'].includes(te.toolName)) {
+        fileGraph.recordEdit(te.filePath);
         stateStore.setFiles(fileGraph.getAllFiles());
-      } else if (toolEvent.toolName === 'Read') {
-        fileGraph.recordRead(toolEvent.filePath);
+      } else if (te.toolName === 'Read') {
+        fileGraph.recordRead(te.filePath);
         stateStore.setFiles(fileGraph.getAllFiles());
       }
     }
 
-    const tasks = extractTasksFromToolEvent(toolEvent);
+    const tasks = extractTasksFromToolEvent(te);
     if (tasks) {
-      const currentState = stateStore.getState();
-      const result = buildTaskTree(tasks, currentState.tasks);
+      const cs = stateStore.getState();
+      const result = buildTaskTree(tasks, cs.tasks);
       stateStore.setTasks(result.tasks, result.currentTaskIndex);
     }
   }
 
   if (event.type === 'tool_end') {
-    const toolEvent = event.data as ToolCallEvent;
-    const log = toolEventToLog(toolEvent);
-    stateStore.completeActiveTool(log);
+    const te = event.data as ToolCallEvent;
+    stateStore.completeActiveTool(toolEventToLog(te));
   }
 }
 
-// ─── Tail activity polling ──────────────────────────
+// ─── Activity monitor ────────────────────────────────
 
 let tailActivityTimer: NodeJS.Timeout | null = null;
-const POLL_INTERVAL_MS = 5_000;
-const ACTIVE_TOOL_TIMEOUT = 120_000;   // 2m — tool running is fine
-const IDLE_TIMEOUT = 30_000;           // 30s — no new lines, no tool running => done
+const POLL_MS = 5_000;
+const IDLE_TIMEOUT = 30_000;
+const ACTIVE_TOOL_TIMEOUT = 120_000;
 
-function startTailActivityCheck(sessionPath: string): void {
+function startTailActivityCheck(sp: string): void {
   if (tailActivityTimer) clearInterval(tailActivityTimer);
   tailActivityTimer = setInterval(() => {
-    const age = getFileAge(sessionPath);
+    const age = getFileAge(sp);
     const s = stateStore.getState();
-    const hasRunningTasks = s.tasks.some((t) => t.status === 'in_progress' || t.status === 'pending');
 
-    // If file is being written, it's working — no matter what
-    if (age < POLL_INTERVAL_MS) {
-      stateStore.setSessionStatus('working');
-      return;
-    }
+    if (age < POLL_MS) { stateStore.setSessionStatus('working'); return; }
+    if (hasRunningTasks(s)) { stateStore.setSessionStatus('working'); return; }
+    if (age > IDLE_TIMEOUT && !s.activeToolCall) { stateStore.setSessionStatus('done'); return; }
+    if (age > ACTIVE_TOOL_TIMEOUT && s.activeToolCall) { stateStore.setSessionStatus('interrupted'); return; }
 
-    // If tasks are still running, the session is working
-    if (hasRunningTasks) {
-      stateStore.setSessionStatus('working');
-      return;
-    }
-
-    // No running tasks + file idle + no active tool => done
-    if (age > IDLE_TIMEOUT && !s.activeToolCall) {
-      stateStore.setSessionStatus('done');
-      return;
-    }
-
-    // Long idle with active tool => interrupted
-    if (age > ACTIVE_TOOL_TIMEOUT && s.activeToolCall) {
-      stateStore.setSessionStatus('interrupted');
-      return;
-    }
-
-    // Default: working
     stateStore.setSessionStatus('working');
-  }, POLL_INTERVAL_MS);
+  }, POLL_MS);
 }
 
-// ─── Helpers ──────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────
 
-function switchToSession(sessionPath: string): void {
+function hasRunningTasks(s: Readonly<AgentSessionState>): boolean {
+  return s.tasks.some((t) => t.status === 'in_progress' || t.status === 'pending');
+}
+
+function setAllTasksDone(): void {
+  const s = stateStore.getState();
+  const cleaned = s.tasks.map((t) =>
+    t.status === 'completed' || t.status === 'failed' ? t : { ...t, status: 'completed' as const, completedAt: Date.now() },
+  );
+  stateStore.setTasks(cleaned, cleaned.length);
+}
+
+function switchToSession(sp: string): void {
   stopTail();
   fileGraph.reset();
-  stateStore.reset(getProjectNameFromPath(sessionPath));
-  stateStore.setCurrentSessionPath(sessionPath);
-  replayFileSync(sessionPath);
-  startTail(sessionPath);
-  outputChannel.appendLine(`[Session] ${sessionPath}`);
+  stateStore.reset(getProjectNameFromPath(sp));
+  stateStore.setCurrentSessionPath(sp);
+  replayFileSync(sp);
+  startTail(sp);
+  outputChannel.appendLine(`[Session] ${sp}`);
 }
 
-function extractCwdFromSession(filePath: string): string | null {
-  if (!fs.existsSync(filePath)) return null;
-  const content = fs.readFileSync(filePath, 'utf-8');
+function extractCwdFromSession(fp: string): string | null {
+  if (!fs.existsSync(fp)) return null;
+  const content = fs.readFileSync(fp, 'utf-8');
   const lines = content.split('\n');
   for (let i = 0; i < Math.min(lines.length, 10); i++) {
-    try {
-      const d = JSON.parse(lines[i]);
-      if (d.cwd) return d.cwd;
-    } catch { /* skip */ }
+    try { const d = JSON.parse(lines[i]); if (d.cwd) return d.cwd; } catch { /* skip */ }
   }
   return null;
 }
 
-function getFileAge(filePath: string): number {
-  try { return Date.now() - fs.statSync(filePath).mtimeMs; } catch { return Infinity; }
+function getFileAge(fp: string): number {
+  try { return Date.now() - fs.statSync(fp).mtimeMs; } catch { return Infinity; }
 }
 
 function normalizePath(p: string): string {
@@ -294,8 +271,6 @@ function buildSessionList(files: string[]): SessionInfo[] {
 function refreshSessionList(): void {
   stateStore.setSessions(buildSessionList(listAllSessionFiles()));
 }
-
-// ─── Cleanup ──────────────────────────────────────────
 
 export function deactivate(): void {
   stopTail();
