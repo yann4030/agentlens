@@ -118,12 +118,19 @@ function EmptyState({ status, activeTool, recentTools }: { status: SessionStatus
               <span className="active-tool-name">{activeTool.toolName}</span>
               <span className="active-tool-summary">{activeTool.summary}</span>
             </div>
-          ) : recentTools.length > 0 ? (
-            <div className="active-tool-preview">
-              <span className="active-tool-name">Last: {recentTools[recentTools.length - 1].toolName}</span>
-              <span className="active-tool-summary">{recentTools[recentTools.length - 1].summary}</span>
-            </div>
           ) : null}
+          {recentTools.length > 0 && (
+            <div className="recent-tools-mini">
+              <p className="recent-tools-title">Recent activity:</p>
+              {recentTools.slice(-5).reverse().map((t, i) => (
+                <div key={i} className={`mini-tool mini-tool-${t.status}`}>
+                  <span className="mini-tool-dot" />
+                  <span className="mini-tool-name">{t.toolName}</span>
+                  <span className="mini-tool-summary">{t.summary}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <p className="hint">Claude Code is exploring — no structured tasks yet.</p>
         </div>
       );
