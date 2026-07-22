@@ -89,6 +89,11 @@ export class StateStore {
     this.reevaluateWatchdogAndEmit();
   }
 
+  clearTasks(): void {
+    this.state = { ...this.state, tasks: [] };
+    this.emit('tasks_updated', { tasks: [], currentTaskIndex: 0 });
+  }
+
   setTasks(tasks: SubTask[], currentTaskIndex: number): void {
     const prevById = new Map(this.state.tasks.map((t) => [t.id, t]));
     const prevByTitle = new Map(this.state.tasks.map((t) => [t.title, t]));
