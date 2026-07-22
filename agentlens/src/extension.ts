@@ -209,30 +209,34 @@ function startTailActivityCheck(sessionPath: string): void {
   tailActivityTimer = setInterval(() => {
     const age = getFileAge(sessionPath);
     const s = stateStore.getState();
-    const toolAge = s.activeToolCall ? Date.now() - (s.activeToolCall.timestamp || 0) : 0;
+    const hasRunningTasks = s.tasks.some((t) => t.status === 'in_progress' || t.status === 'pending');
 
-    // Clock: if file hasn't been written in IDLE_TIMEOUT and no tool is running => DONE
-    if (age > IDLE_TIMEOUT && !s.activeToolCall) {
-      stateStore.setSessionStatus('done');
-      return;
-    }
-
-    // If file is being written, it's working
+    // If file is being written, it's working — no matter what
     if (age < POLL_INTERVAL_MS) {
       stateStore.setSessionStatus('working');
       return;
     }
 
-    // Check: long idle with active tool (potential orphan)
+    // If tasks are still running, the session is working
+    if (hasRunningTasks) {
+      stateStore.setSessionStatus('working');
+      return;
+    }
+
+    // No running tasks + file idle + no active tool => done
+    if (age > IDLE_TIMEOUT && !s.activeToolCall) {
+      stateStore.setSessionStatus('done');
+      return;
+    }
+
+    // Long idle with active tool => interrupted
     if (age > ACTIVE_TOOL_TIMEOUT && s.activeToolCall) {
       stateStore.setSessionStatus('interrupted');
       return;
     }
 
-    // File idle > IDLE_TIMEOUT but still < activeToolTimeout with no tool => DONE
-    if (age > IDLE_TIMEOUT && !s.activeToolCall) {
-      stateStore.setSessionStatus('done');
-    }
+    // Default: working
+    stateStore.setSessionStatus('working');
   }, POLL_INTERVAL_MS);
 }
 
