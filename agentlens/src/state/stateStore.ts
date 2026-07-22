@@ -117,7 +117,7 @@ export class StateStore {
       }
     }
 
-    this.state = { ...this.state, tasks: merged, currentTaskIndex };
+    this.state = { ...this.state, tasks: merged, currentTaskIndex, lastTodoWriteAt: nowMs() };
     this.emit('tasks_updated', { tasks: this.state.tasks, currentTaskIndex });
   }
 
@@ -210,5 +210,6 @@ function makeInitialState(id: string): AgentSessionState {
     availableSessions: [],
     currentSessionPath: '',
     sessionStatus: 'no_session',
+    lastTodoWriteAt: 0,
   };
 }

@@ -84,6 +84,7 @@ export interface AgentSessionState {
   availableSessions: SessionInfo[];
   currentSessionPath: string;
   sessionStatus: SessionStatus;
+  lastTodoWriteAt: number;
 }
 
 export interface StateChange {

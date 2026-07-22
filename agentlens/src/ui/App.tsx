@@ -21,7 +21,7 @@ const EMPTY: AgentSessionState = {
   watchdog: { isNormal: true, loopDetected: false, stallDetected: false, loopConfidence: 0, lastHeartbeat: 0 },
   tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
   files: [], availableSessions: [], currentSessionPath: '',
-  sessionStatus: 'no_session',
+  sessionStatus: 'no_session', lastTodoWriteAt: 0,
 };
 
 type Tab = 'tasks' | 'tools' | 'files';

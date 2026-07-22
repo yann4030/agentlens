@@ -77,30 +77,16 @@ function startWatching(): void {
   const state = stateStore.getState();
   const fileAge = getFileAge(sessionPath);
   const heartbeatAge = Date.now() - state.watchdog.lastHeartbeat;
+  const todoAge = state.lastTodoWriteAt ? Date.now() - state.lastTodoWriteAt : 0;
 
-  // If the last TodoWrite is older than 10 minutes (600s) and the file is being written
-  // now, this is a new session reusing the same .jsonl. Auto-clear old tasks.
-  const isNewSession = fileAge < 30_000 && heartbeatAge > 600_000;
-  const hasStaleTasks = state.tasks.length > 0 && state.tasks.every(
-    (t) => t.status === 'completed' || t.status === 'failed',
-  ) && heartbeatAge > 120_000; // 2 min since last heartbeat = session wrapped up
+  // If file hasn't been touched in > 5 min, explicitly stale => DONE
+  const isTrulyStale = fileAge > 300_000;
 
-  if (fileAge < 30_000 || heartbeatAge < 30_000) {
-    if (isNewSession) {
-      outputChannel.appendLine('[Start] New session — clearing all tasks');
-      stateStore.reset('');
-      stateStore.setSessionStatus('working');
-    } else if (hasStaleTasks && heartbeatAge > 120_000) {
-      // Old session's completed tasks — don't show them, wait for new TodoWrite
-      outputChannel.appendLine('[Start] Session active but last TodoWrite is stale — clearing completed tasks');
-      stateStore.clearTasks();
-      stateStore.setSessionStatus('working');
-    } else {
-      stateStore.setSessionStatus('working');
-    }
-  } else {
-    // File is stale: session FINISHED
-    // Mark all non-completed tasks as done, clear active tool
+  // If the last TodoWrite is > 2 min old, clear old tasks
+  // Don't touch active tool state
+  const hasStaleTodoWrite = state.tasks.length > 0 && todoAge > 120_000;
+
+  if (isTrulyStale) {
     stateStore.setSessionStatus('done');
     if (state.activeToolCall) stateStore.clearActiveTool();
     const hasRunning = state.tasks.some((t) => t.status !== 'completed' && t.status !== 'failed');
@@ -110,6 +96,12 @@ function startWatching(): void {
       );
       stateStore.setTasks(cleaned, cleaned.length);
     }
+  } else if (hasStaleTodoWrite) {
+    outputChannel.appendLine('[Start] Old TodoWrite — clearing tasks (waiting for new)');
+    stateStore.clearTasks();
+    stateStore.setSessionStatus('working');
+  } else {
+    stateStore.setSessionStatus('working');
   }
 
   startTail(sessionPath);
