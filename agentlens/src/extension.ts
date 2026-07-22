@@ -286,8 +286,9 @@ function processLine(line: string): void {
     }
   }
 
-  // Heartbeat from real data only
-  stateStore.updateHeartbeat();
+  // Use the event's own timestamp as heartbeat, NOT wall-clock time.
+  // This ensures replay doesn't fake a "just now" heartbeat.
+  stateStore.setHeartbeat(event.timestamp);
 
   if (result.tokens) stateStore.addTokens(result.tokens);
 

@@ -34,13 +34,16 @@ export class StateStore {
   }
 
   updateHeartbeat(): void {
-    const now = nowMs();
+    this.setHeartbeat(nowMs());
+  }
+
+  setHeartbeat(ts: number): void {
     this.state = {
       ...this.state,
-      lastUpdatedTime: now,
-      watchdog: { ...this.state.watchdog, lastHeartbeat: now },
+      lastUpdatedTime: ts,
+      watchdog: { ...this.state.watchdog, lastHeartbeat: ts },
     };
-    this.emit('heartbeat', { lastUpdatedTime: now });
+    this.emit('heartbeat', { lastUpdatedTime: ts });
   }
 
   setActiveTool(tool: ToolCallLog): void {
