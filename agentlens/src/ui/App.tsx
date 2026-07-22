@@ -90,7 +90,7 @@ export default function App() {
 
       <main className="main-content">
         {activeView === 'tasks' && (
-          <TaskTree tasks={state.tasks} currentTaskIndex={state.currentTaskIndex} sessionStatus={state.sessionStatus} />
+          <TaskTree tasks={state.tasks} currentTaskIndex={state.currentTaskIndex} sessionStatus={state.sessionStatus} activeTool={state.activeToolCall} recentTools={state.recentTools} />
         )}
         {activeView === 'tools' && (
           <ToolFeed tools={state.recentTools} activeTool={state.activeToolCall} />

@@ -1,17 +1,19 @@
 import React, { useState } from 'react';
-import type { SubTask, SessionStatus } from '../../common/types';
+import type { SubTask, SessionStatus, ToolCallLog } from '../../common/types';
 
 interface Props {
   tasks: SubTask[];
   currentTaskIndex: number;
   sessionStatus: SessionStatus;
+  activeTool?: ToolCallLog;
+  recentTools: ToolCallLog[];
 }
 
-export const TaskTree: React.FC<Props> = ({ tasks, currentTaskIndex, sessionStatus }) => {
+export const TaskTree: React.FC<Props> = ({ tasks, currentTaskIndex, sessionStatus, activeTool, recentTools }) => {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   if (tasks.length === 0) {
-    return <EmptyState status={sessionStatus} />;
+    return <EmptyState status={sessionStatus} activeTool={activeTool} recentTools={recentTools} />;
   }
 
   const toggle = (id: string) => {
@@ -105,13 +107,24 @@ function formatDuration(ms: number): string {
   return `${h}h ${m % 60}m`;
 }
 
-function EmptyState({ status }: { status: SessionStatus }) {
+function EmptyState({ status, activeTool, recentTools }: { status: SessionStatus; activeTool?: ToolCallLog; recentTools: ToolCallLog[] }) {
   switch (status) {
     case 'working':
       return (
         <div className="empty-state">
           <p>Agent is working...</p>
-          <p className="hint">Waiting for Claude Code to issue tasks.</p>
+          {activeTool ? (
+            <div className="active-tool-preview">
+              <span className="active-tool-name">{activeTool.toolName}</span>
+              <span className="active-tool-summary">{activeTool.summary}</span>
+            </div>
+          ) : recentTools.length > 0 ? (
+            <div className="active-tool-preview">
+              <span className="active-tool-name">Last: {recentTools[recentTools.length - 1].toolName}</span>
+              <span className="active-tool-summary">{recentTools[recentTools.length - 1].summary}</span>
+            </div>
+          ) : null}
+          <p className="hint">Claude Code is exploring — no structured tasks yet.</p>
         </div>
       );
     case 'done':
