@@ -15,6 +15,23 @@ let tailStream: TailStream | null = null;
 let fileGraph = new FileGraph();
 let outputChannel: vscode.OutputChannel;
 
+// ─── Thresholds (from VS Code settings) ──────────────
+
+function cfg() {
+  const c = vscode.workspace.getConfiguration('agentlens');
+  return {
+    pollMs: c.get<number>('pollIntervalMs', 5_000),
+    idleTimeout: c.get<number>('idleTimeoutSeconds', 60) * 1000,
+    activeToolTimeout: c.get<number>('activeToolTimeoutSeconds', 120) * 1000,
+    staleFileTimeout: c.get<number>('staleFileTimeoutSeconds', 300) * 1000,
+    staleTodoWrite: c.get<number>('staleTodoWriteSeconds', 120) * 1000,
+    watchdogNotifications: c.get<boolean>('watchdogNotificationsEnabled', true),
+    loopDetection: c.get<boolean>('loopDetectionEnabled', true),
+  };
+}
+
+// ─── Activation ──────────────────────────────────────
+
 export function activate(context: vscode.ExtensionContext) {
   stateStore = new StateStore();
   outputChannel = vscode.window.createOutputChannel('AgentLens');
@@ -24,33 +41,44 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.registerWebviewViewProvider(SidebarProvider.viewId, sidebarProvider),
   );
 
-  context.subscriptions.push(
-    vscode.commands.registerCommand('agentlens.refresh', () => startWatching()),
-  );
-  context.subscriptions.push(
-    vscode.commands.registerCommand('agentlens.clearHistory', () => {
-      fileGraph.reset();
-      stateStore.reset('');
-    }),
-  );
-  context.subscriptions.push(
-    vscode.commands.registerCommand('agentlens.switchSession', async () => {
-      const allFiles = listAllSessionFiles();
-      if (allFiles.length === 0) {
-        vscode.window.showInformationMessage('No Claude Code sessions found.');
-        return;
-      }
-      const sessions = buildSessionList(allFiles);
-      const items = sessions.map((s) => ({
-        label: s.label,
-        description: s.sessionId.slice(0, 8) + '...',
-        detail: s.path,
-      }));
-      const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Select a session' });
-      if (picked) switchToSession(picked.detail);
-    }),
-  );
+  context.subscriptions.push(vscode.commands.registerCommand('agentlens.refresh', () => startWatching()));
+  context.subscriptions.push(vscode.commands.registerCommand('agentlens.clearHistory', () => {
+    fileGraph.reset();
+    stateStore.reset('');
+  }));
+  context.subscriptions.push(vscode.commands.registerCommand('agentlens.switchSession', async () => {
+    const allFiles = listAllSessionFiles();
+    if (allFiles.length === 0) {
+      vscode.window.showInformationMessage('No Claude Code sessions found.');
+      return;
+    }
+    const sessions = buildSessionList(allFiles);
+    const items = sessions.map((s) => ({
+      label: s.label, description: s.sessionId.slice(0, 8) + '...', detail: s.path,
+    }));
+    const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Select a session' });
+    if (picked) switchToSession(picked.detail);
+  }));
   context.subscriptions.push(outputChannel);
+
+  // Watchdog notification debounce
+  let lastLoopAlert = 0;
+  let lastStallAlert = 0;
+  stateStore.subscribe((change) => {
+    if (change.type !== 'watchdog_changed') return;
+    const w = stateStore.getState().watchdog;
+    const now = Date.now();
+    if (cfg().watchdogNotifications) {
+      if (w.loopDetected && now - lastLoopAlert > 60_000) {
+        lastLoopAlert = now;
+        vscode.window.showWarningMessage(`AgentLens: Loop detected — ${w.warningMessage || 'check the agent'}`, 'Dismiss');
+      }
+      if (w.stallDetected && now - lastStallAlert > 60_000) {
+        lastStallAlert = now;
+        vscode.window.showWarningMessage(`AgentLens: Agent stalled — ${w.warningMessage || 'no recent output'}`, 'Dismiss');
+      }
+    }
+  });
 
   startWatching();
   refreshSessionList();
@@ -58,13 +86,6 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 // ─── Session lifecycle ───────────────────────────────
-//
-//   no_session → [session found] → working
-//   working    → [idle + no tasks + no tool] → done
-//   working    → [idle + stuck tool > 2m] → interrupted
-//
-// Task state guards session state: if any task is in_progress or pending,
-// the session stays "working" regardless of file activity.
 
 function startWatching(): void {
   stopTail();
@@ -85,14 +106,13 @@ function startWatching(): void {
   const state = stateStore.getState();
   const fileAge = getFileAge(sessionPath);
   const todoAge = state.lastTodoWriteAt ? Date.now() - state.lastTodoWriteAt : 0;
+  const t = cfg();
 
-  if (fileAge > 300_000) {
-    // File untouched for > 5 min → truly done
+  if (fileAge > t.staleFileTimeout) {
     stateStore.setSessionStatus('done');
     if (state.activeToolCall) stateStore.clearActiveTool();
     if (hasRunningTasks(state)) setAllTasksDone();
-  } else if (state.tasks.length > 0 && todoAge > 120_000) {
-    // Old completed TodoWrite, new session using same file → clear
+  } else if (state.tasks.length > 0 && todoAge > t.staleTodoWrite) {
     stateStore.clearTasks();
     stateStore.setSessionStatus('working');
   } else {
@@ -109,7 +129,6 @@ function findSessionForWorkspace(): string | null {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   const workspaceCwd = workspaceFolder?.uri.fsPath;
   if (!workspaceCwd) return findLatestSessionFile();
-
   for (const f of listAllSessionFiles()) {
     const cwd = extractCwdFromSession(f);
     if (cwd && normalizePath(cwd) === normalizePath(workspaceCwd)) return f;
@@ -189,23 +208,21 @@ function processLine(line: string): void {
 // ─── Activity monitor ────────────────────────────────
 
 let tailActivityTimer: NodeJS.Timeout | null = null;
-const POLL_MS = 5_000;
-const IDLE_TIMEOUT = 30_000;
-const ACTIVE_TOOL_TIMEOUT = 120_000;
 
 function startTailActivityCheck(sp: string): void {
   if (tailActivityTimer) clearInterval(tailActivityTimer);
   tailActivityTimer = setInterval(() => {
+    const t = cfg();
     const age = getFileAge(sp);
     const s = stateStore.getState();
 
-    if (age < POLL_MS) { stateStore.setSessionStatus('working'); return; }
+    if (age < t.pollMs) { stateStore.setSessionStatus('working'); return; }
     if (hasRunningTasks(s)) { stateStore.setSessionStatus('working'); return; }
-    if (age > IDLE_TIMEOUT && !s.activeToolCall) { stateStore.setSessionStatus('done'); return; }
-    if (age > ACTIVE_TOOL_TIMEOUT && s.activeToolCall) { stateStore.setSessionStatus('interrupted'); return; }
+    if (age > t.idleTimeout && !s.activeToolCall) { stateStore.setSessionStatus('done'); return; }
+    if (age > t.activeToolTimeout && s.activeToolCall) { stateStore.setSessionStatus('interrupted'); return; }
 
     stateStore.setSessionStatus('working');
-  }, POLL_MS);
+  }, cfg().pollMs);
 }
 
 // ─── Helpers ─────────────────────────────────────────

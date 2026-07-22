@@ -180,14 +180,13 @@ body {
   list-style: none;
 }
 .task-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  display: block;
+  padding: 4px 8px;
   border-radius: 4px;
   font-size: 13px;
   border-left: 3px solid transparent;
   margin-bottom: 2px;
+  cursor: pointer;
 }
 
 /* Row highlighting per status */
@@ -197,6 +196,12 @@ body {
 .task-active {
   background: var(--bg-secondary);
   border-left-color: var(--accent);
+}
+
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* Status marker — the icon circle */
@@ -272,6 +277,44 @@ body {
   background: transparent;
   color: var(--fg-secondary);
   opacity: 0.5;
+}
+
+/* Task detail expand panel */
+.task-detail {
+  margin-top: 6px;
+  margin-left: 28px;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.task-detail-row {
+  display: flex;
+  gap: 12px;
+  padding: 2px 0;
+}
+.task-detail-label {
+  width: 60px;
+  flex-shrink: 0;
+  color: var(--fg-secondary);
+  opacity: 0.7;
+  font-weight: 600;
+}
+.task-elapsed {
+  color: var(--warning);
+  font-weight: 600;
+}
+.task-detail-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.task-detail-file {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--vscode-editor-background, #1e1e1e);
+  font-family: monospace;
 }
 
 .task-files { display: flex; gap: 4px; flex-wrap: wrap; }

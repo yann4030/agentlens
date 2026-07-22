@@ -38,8 +38,52 @@
       {
         "command": "agentlens.clearHistory",
         "title": "AgentLens: Clear History"
+      },
+      {
+        "command": "agentlens.switchSession",
+        "title": "AgentLens: Switch Session"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "AgentLens",
+      "properties": {
+        "agentlens.idleTimeoutSeconds": {
+          "type": "number",
+          "default": 60,
+          "description": "Seconds without file writes before session is marked Done."
+        },
+        "agentlens.activeToolTimeoutSeconds": {
+          "type": "number",
+          "default": 120,
+          "description": "Seconds a tool can run without new output before session is marked Interrupted."
+        },
+        "agentlens.staleFileTimeoutSeconds": {
+          "type": "number",
+          "default": 300,
+          "description": "Seconds without file writes before session is considered completely stale and all tasks are auto-completed."
+        },
+        "agentlens.staleTodoWriteSeconds": {
+          "type": "number",
+          "default": 120,
+          "description": "Seconds since last TodoWrite before old tasks are cleared at startup."
+        },
+        "agentlens.pollIntervalMs": {
+          "type": "number",
+          "default": 5000,
+          "description": "How often (ms) the activity monitor checks the session file."
+        },
+        "agentlens.watchdogNotificationsEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show VS Code popup notifications when watchdog alerts fire."
+        },
+        "agentlens.loopDetectionEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect tool-call loops (4 identical calls or alternating patterns)."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "webpack --mode production",
