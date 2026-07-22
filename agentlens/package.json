@@ -8,7 +8,8 @@
     "vscode": "^1.85.0"
   },
   "activationEvents": [
-    "onView:agentlens.sidebar"
+    "onView:agentlens.sidebar",
+    "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "contributes": {
