@@ -1,4 +1,5 @@
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
+export type SessionStatus = 'no_session' | 'working' | 'done' | 'interrupted' | 'waiting';
 
 export interface SubTask {
   id: string;
@@ -82,9 +83,10 @@ export interface AgentSessionState {
   files: FileNode[];
   availableSessions: SessionInfo[];
   currentSessionPath: string;
+  sessionStatus: SessionStatus;
 }
 
 export interface StateChange {
-  type: 'tasks_updated' | 'tool_started' | 'tool_ended' | 'heartbeat' | 'watchdog_changed' | 'session_reset' | 'tokens_updated' | 'files_updated' | 'sessions_list';
+  type: 'tasks_updated' | 'tool_started' | 'tool_ended' | 'heartbeat' | 'watchdog_changed' | 'session_reset' | 'tokens_updated' | 'files_updated' | 'sessions_list' | 'status_changed';
   partial: Partial<AgentSessionState>;
 }

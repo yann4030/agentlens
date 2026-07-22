@@ -14,13 +14,6 @@ let stateStore: StateStore;
 let tailStream: TailStream | null = null;
 let fileGraph = new FileGraph();
 let outputChannel: vscode.OutputChannel;
-let lastWatchdogAlert = { stall: false, loop: false, toolRunning: false };
-let stallCheckInterval: NodeJS.Timeout | null = null;
-
-const STALL_CHECK_MS = 5000;
-const STALL_WARN_ACTIVE_TOOL_MS = 120_000; // 2 min — tool running, be patient
-const STALL_AUTO_CLEAR_ACTIVE_MS = 300_000; // 5 min — auto-clear orphan activeToolCall
-const STALL_WARN_IDLE_MS = 60_000;           // 1 min — nothing happening at all
 
 export function activate(context: vscode.ExtensionContext) {
   stateStore = new StateStore();
@@ -42,39 +35,18 @@ export function activate(context: vscode.ExtensionContext) {
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('agentlens.switchSession', async () => {
-      const sessions = stateStore.getState().availableSessions;
-      if (sessions.length === 0) {
-        const allFiles = listAllSessionFiles();
-        if (allFiles.length === 0) {
-          vscode.window.showInformationMessage('No Claude Code sessions found.');
-          return;
-        }
-        const items = allFiles.map((f) => ({
-          label: path.basename(f, '.jsonl').slice(0, 8) + '...',
-          description: path.basename(path.dirname(f)),
-          detail: f,
-        }));
-        const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Select a session' });
-        if (picked) switchToSession(picked.detail);
-      } else {
-        const items = sessions.map((s) => ({
-          label: s.label,
-          description: s.sessionId.slice(0, 8) + '...',
-          detail: s.path,
-        }));
-        const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Select a session' });
-        if (picked) switchToSession(picked.detail);
+      const allFiles = listAllSessionFiles();
+      if (allFiles.length === 0) {
+        vscode.window.showInformationMessage('No Claude Code sessions found.');
+        return;
       }
+      const sessions = buildSessionList(allFiles);
+      const items = sessions.map((s) => ({ label: s.label, description: s.sessionId.slice(0, 8) + '...', detail: s.path }));
+      const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Select a session' });
+      if (picked) switchToSession(picked.detail);
     }),
   );
-
   context.subscriptions.push(outputChannel);
-
-  // Stall checker: does NOT inject heartbeat. Only evaluates real data.
-  stallCheckInterval = setInterval(() => {
-    checkForStall();
-  }, STALL_CHECK_MS);
-  context.subscriptions.push({ dispose: () => { if (stallCheckInterval) clearInterval(stallCheckInterval); } });
 
   startWatching();
   refreshSessionList();
@@ -82,145 +54,70 @@ export function activate(context: vscode.ExtensionContext) {
   vscode.window.showInformationMessage('AgentLens activated');
 }
 
-function checkForStall(): void {
+// ─── Session matching ────────────────────────────────
+
+function startWatching(): void {
+  stopTail();
+
+  const sessionPath = findSessionForWorkspace();
+  if (!sessionPath) {
+    stateStore.reset('');
+    stateStore.setSessionStatus('no_session');
+    return;
+  }
+
+  outputChannel.appendLine(`[Start] Watching: ${sessionPath}`);
+  stateStore.setCurrentSessionPath(sessionPath);
+  refreshSessionList();
+
+  // Replay the entire file to capture current state
+  replayFileSync(sessionPath);
+
+  // After replay, determine session status
   const state = stateStore.getState();
-  const elapsed = Date.now() - state.watchdog.lastHeartbeat;
-  const hasActiveTool = !!state.activeToolCall;
+  const fileAge = getFileAge(sessionPath);
+  const heartbeatAge = Date.now() - state.watchdog.lastHeartbeat;
 
-  // Auto-clear orphan activeToolCall when agent is clearly done
-  if (hasActiveTool && elapsed > STALL_AUTO_CLEAR_ACTIVE_MS) {
-    outputChannel.appendLine(`[Stall] Auto-clearing orphan activeTool "${state.activeToolCall!.summary}" after ${Math.floor(elapsed / 1000)}s`);
-    stateStore.clearActiveTool();
+  if (fileAge < 30_000 || heartbeatAge < 30_000) {
+    // File is active: session is RUNNING
+    // Tasks are from latest TodoWrite — keep as-is (they're live)
+    stateStore.setSessionStatus('working');
+  } else {
+    // File is stale: session FINISHED
+    // Mark all non-completed tasks as done, clear active tool
+    stateStore.setSessionStatus('done');
+    if (state.activeToolCall) stateStore.clearActiveTool();
+    const hasRunning = state.tasks.some((t) => t.status !== 'completed' && t.status !== 'failed');
+    if (hasRunning) {
+      const cleaned = state.tasks.map((t) =>
+        t.status === 'completed' || t.status === 'failed' ? t : { ...t, status: 'completed' as const, completedAt: Date.now() },
+      );
+      stateStore.setTasks(cleaned, cleaned.length);
+    }
   }
 
-  if (hasActiveTool && elapsed > STALL_WARN_ACTIVE_TOOL_MS && !lastWatchdogAlert.toolRunning) {
-    lastWatchdogAlert.toolRunning = true;
-    const minutes = Math.floor(elapsed / 60000);
-    vscode.window.showWarningMessage(
-      `AgentLens: "${state.activeToolCall!.summary}" has been running for ${minutes}min.`,
-      'Dismiss',
-    );
-  }
-
-  if (!hasActiveTool && elapsed > STALL_WARN_IDLE_MS && !lastWatchdogAlert.stall) {
-    lastWatchdogAlert.stall = true;
-    vscode.window.showWarningMessage(
-      `AgentLens: Agent idle for ${Math.floor(elapsed / 1000)}s.`,
-      'Dismiss',
-    );
-  }
-
-  if (elapsed < 5000) {
-    if (lastWatchdogAlert.stall) lastWatchdogAlert.stall = false;
-    if (lastWatchdogAlert.toolRunning) lastWatchdogAlert.toolRunning = false;
-  }
-
-  stateStore.evaluateStall(elapsed, hasActiveTool);
+  startTail(sessionPath);
 }
 
-function refreshSessionList(): void {
-  const sessionFiles = listAllSessionFiles();
-  const sessions: SessionInfo[] = sessionFiles.map((f) => {
-    const stat = fs.statSync(f);
-    const parts = f.split(path.sep);
-    const projectsIdx = parts.lastIndexOf('projects');
-    const projectHash = projectsIdx >= 0 ? parts[projectsIdx + 1] : 'unknown';
-    const sessionId = path.basename(f, '.jsonl');
-
-    let label = projectHash;
-    try {
-      const cwd = extractCwdFromSession(f);
-      if (cwd) label = path.basename(cwd);
-    } catch { /* ignore */ }
-
-    return {
-      path: f,
-      projectHash,
-      sessionId,
-      mtime: stat.mtime.getTime(),
-      label,
-    };
-  }).filter((s) => s.mtime > Date.now() - 7 * 24 * 3600 * 1000);
-
-  stateStore.setSessions(sessions);
-}
-
-function extractCwdFromSession(filePath: string): string | null {
-  if (!fs.existsSync(filePath)) return null;
-  const head = fs.readFileSync(filePath, { encoding: 'utf-8' });
-  // CWD is often on line 2, not line 1. Scan first 10 lines.
-  const lines = head.split('\n');
-  for (let i = 0; i < Math.min(lines.length, 10); i++) {
-    try {
-      const d = JSON.parse(lines[i]);
-      if (d.cwd) return d.cwd;
-    } catch { /* skip */ }
-  }
-  return null;
-}
-
-/** Find the session file whose cwd matches the currently active VS Code workspace. */
 function findSessionForWorkspace(): string | null {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   const workspaceCwd = workspaceFolder?.uri.fsPath;
-  if (!workspaceCwd) return null;
+  if (!workspaceCwd) return findLatestSessionFile();
 
   const allFiles = listAllSessionFiles();
   for (const f of allFiles) {
     const cwd = extractCwdFromSession(f);
     if (cwd && normalizePath(cwd) === normalizePath(workspaceCwd)) {
-      outputChannel.appendLine(`[Match] Workspace "${workspaceCwd}" → session "${f}"`);
       return f;
     }
   }
-
-  // Fallback: return latest if no workspace match
-  outputChannel.appendLine(`[Match] No workspace match for "${workspaceCwd}", falling back to latest`);
   return findLatestSessionFile();
 }
 
-function normalizePath(p: string): string {
-  return path.normalize(p).replace(/\\/g, '/').toLowerCase();
-}
-
-function switchToSession(sessionPath: string): void {
-  stopTail();
-  fileGraph.reset();
-  stateStore.reset(getProjectNameFromPath(sessionPath));
-  stateStore.setCurrentSessionPath(sessionPath);
-
-  replayFileSync(sessionPath);
-  startTail(sessionPath);
-
-  outputChannel.appendLine(`[Session] Switched to ${sessionPath}`);
-}
-
-function startWatching(): void {
-  stopTail();
-
-  // Match session to current VS Code workspace, not just latest globally
-  const sessionPath = findSessionForWorkspace();
-  if (!sessionPath) {
-    vscode.window.showWarningMessage('AgentLens: No Claude Code session found for this workspace.');
-    return;
-  }
-
-  outputChannel.appendLine(`[Start] Watching: ${sessionPath}`);
-
-  fileGraph.reset();
-  stateStore.reset(getProjectNameFromPath(sessionPath));
-  stateStore.setCurrentSessionPath(sessionPath);
-  refreshSessionList();
-
-  replayFileSync(sessionPath);
-  startTail(sessionPath);
-}
+// ─── Tail / Replay ────────────────────────────────────
 
 function stopTail(): void {
-  if (tailStream) {
-    tailStream.stop();
-    tailStream = null;
-  }
+  if (tailStream) { tailStream.stop(); tailStream = null; }
 }
 
 function startTail(sessionPath: string): void {
@@ -230,7 +127,6 @@ function startTail(sessionPath: string): void {
   tailStream.start();
 }
 
-/** Read entire file synchronously, process every line, THEN return. No race with tail. */
 function replayFileSync(filePath: string): void {
   if (!fs.existsSync(filePath)) return;
   const content = fs.readFileSync(filePath, 'utf-8');
@@ -239,36 +135,10 @@ function replayFileSync(filePath: string): void {
     const trimmed = line.trim();
     if (trimmed) processLine(trimmed);
   }
-
-  const state = stateStore.getState();
-
-  // Clear orphan activeToolCall from finished sessions
-  if (state.activeToolCall) {
-    outputChannel.appendLine(`[Replay] Clearing presumed-done activeTool: ${state.activeToolCall.summary}`);
-    stateStore.clearActiveTool();
-  }
-
-  // Only auto-complete tasks if BOTH conditions hold:
-  // 1. Last heartbeat > 60s ago (no recent activity in JSONL)
-  // 2. File itself hasn't been modified in > 60s (agent not actively writing)
-  const heartbeatAge = Date.now() - state.watchdog.lastHeartbeat;
-  let fileAge = 0;
-  try { fileAge = Date.now() - fs.statSync(filePath).mtimeMs; } catch { /* ok */ }
-  const isTrulyStale = heartbeatAge > 60_000 && fileAge > 60_000;
-
-  if (isTrulyStale && !state.activeToolCall && state.tasks.length > 0) {
-    const stale = state.tasks.filter((t) => t.status !== 'completed' && t.status !== 'failed');
-    if (stale.length > 0) {
-      outputChannel.appendLine(`[Replay] Truly stale (heartbeat=${Math.floor(heartbeatAge/1000)}s, file=${Math.floor(fileAge/1000)}s), auto-completing ${stale.length} tasks`);
-      const cleaned = state.tasks.map((t) =>
-        t.status === 'completed' || t.status === 'failed' ? t : { ...t, status: 'completed' as const, completedAt: Date.now() },
-      );
-      stateStore.setTasks(cleaned, cleaned.length);
-    }
-  }
-
-  outputChannel.appendLine(`[Replay] ${lines.length} lines processed`);
+  outputChannel.appendLine(`[Replay] ${lines.length} lines`);
 }
+
+// ─── Event processing ─────────────────────────────────
 
 function processLine(line: string): void {
   const result = parseJsonlLine(line);
@@ -279,15 +149,7 @@ function processLine(line: string): void {
 
   const event = result.event;
 
-  if (event.sessionId && event.sessionId.length > 8) {
-    const current = stateStore.getState();
-    if (current.sessionId !== event.sessionId) {
-      stateStore.setSessionId(event.sessionId);
-    }
-  }
-
-  // Use the event's own timestamp as heartbeat, NOT wall-clock time.
-  // This ensures replay doesn't fake a "just now" heartbeat.
+  // Heartbeat from event's own timestamp (not wall clock)
   stateStore.setHeartbeat(event.timestamp);
 
   if (result.tokens) stateStore.addTokens(result.tokens);
@@ -298,12 +160,10 @@ function processLine(line: string): void {
     stateStore.setActiveTool(log);
 
     if (toolEvent.filePath) {
-      const editTools = ['Write', 'Edit'];
-      const readTools = ['Read'];
-      if (editTools.includes(toolEvent.toolName)) {
+      if (['Write', 'Edit'].includes(toolEvent.toolName)) {
         fileGraph.recordEdit(toolEvent.filePath);
         stateStore.setFiles(fileGraph.getAllFiles());
-      } else if (readTools.includes(toolEvent.toolName)) {
+      } else if (toolEvent.toolName === 'Read') {
         fileGraph.recordRead(toolEvent.filePath);
         stateStore.setFiles(fileGraph.getAllFiles());
       }
@@ -324,7 +184,63 @@ function processLine(line: string): void {
   }
 }
 
+// ─── Helpers ──────────────────────────────────────────
+
+function switchToSession(sessionPath: string): void {
+  stopTail();
+  fileGraph.reset();
+  stateStore.reset(getProjectNameFromPath(sessionPath));
+  stateStore.setCurrentSessionPath(sessionPath);
+  replayFileSync(sessionPath);
+  startTail(sessionPath);
+  outputChannel.appendLine(`[Session] ${sessionPath}`);
+}
+
+function extractCwdFromSession(filePath: string): string | null {
+  if (!fs.existsSync(filePath)) return null;
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const lines = content.split('\n');
+  for (let i = 0; i < Math.min(lines.length, 10); i++) {
+    try {
+      const d = JSON.parse(lines[i]);
+      if (d.cwd) return d.cwd;
+    } catch { /* skip */ }
+  }
+  return null;
+}
+
+function getFileAge(filePath: string): number {
+  try { return Date.now() - fs.statSync(filePath).mtimeMs; } catch { return Infinity; }
+}
+
+function normalizePath(p: string): string {
+  return path.normalize(p).replace(/\\/g, '/').toLowerCase();
+}
+
+function buildSessionList(files: string[]): SessionInfo[] {
+  return files.map((f) => {
+    try {
+      const stat = fs.statSync(f);
+      const parts = f.split(path.sep);
+      const projectsIdx = parts.lastIndexOf('projects');
+      const projectHash = projectsIdx >= 0 ? parts[projectsIdx + 1] : '?';
+      const sessionId = path.basename(f, '.jsonl');
+      let label = projectHash;
+      const cwd = extractCwdFromSession(f);
+      if (cwd) label = path.basename(cwd);
+      return { path: f, projectHash, sessionId, mtime: stat.mtime.getTime(), label };
+    } catch {
+      return { path: f, projectHash: '?', sessionId: '?', mtime: 0, label: f };
+    }
+  }).filter((s) => s.mtime > Date.now() - 7 * 24 * 3600 * 1000);
+}
+
+function refreshSessionList(): void {
+  stateStore.setSessions(buildSessionList(listAllSessionFiles()));
+}
+
+// ─── Cleanup ──────────────────────────────────────────
+
 export function deactivate(): void {
-  if (tailStream) tailStream.stop();
-  if (stallCheckInterval) clearInterval(stallCheckInterval);
+  stopTail();
 }

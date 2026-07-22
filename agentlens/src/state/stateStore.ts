@@ -1,13 +1,10 @@
-import type { AgentSessionState, ToolCallLog, SubTask, StateChange, FileNode, SessionInfo } from '../common/types';
+import type { AgentSessionState, ToolCallLog, SubTask, StateChange, FileNode, SessionInfo, SessionStatus } from '../common/types';
 import { nowMs } from '../common/utils';
 import { LOOP_WINDOW_SIZE, MAX_RECENT_TOOLS } from '../common/constants';
 import { checkLoop, shouldAlert } from '../watchdog/loopDetector';
 import { buildWatchdogStatus } from '../watchdog/stallWatchdog';
 
 type StateListener = (change: StateChange) => void;
-
-const STALL_WARN_ACTIVE_TOOL_MS = 300_000; // 5 min
-const STALL_WARN_IDLE_MS = 60_000;          // 1 min
 
 export class StateStore {
   private state: AgentSessionState;
@@ -26,15 +23,14 @@ export class StateStore {
     return () => this.listeners.delete(fn);
   }
 
-  // --- mutations ---
-
   setSessionId(id: string): void {
     this.state = { ...this.state, sessionId: id };
     this.emit('session_reset', { sessionId: id });
   }
 
-  updateHeartbeat(): void {
-    this.setHeartbeat(nowMs());
+  setSessionStatus(status: SessionStatus): void {
+    this.state = { ...this.state, sessionStatus: status };
+    this.emit('status_changed', { sessionStatus: status });
   }
 
   setHeartbeat(ts: number): void {
@@ -43,7 +39,6 @@ export class StateStore {
       lastUpdatedTime: ts,
       watchdog: { ...this.state.watchdog, lastHeartbeat: ts },
     };
-    this.emit('heartbeat', { lastUpdatedTime: ts });
   }
 
   setActiveTool(tool: ToolCallLog): void {
@@ -53,8 +48,8 @@ export class StateStore {
       lastUpdatedTime: nowMs(),
       activeToolCall: { ...tool, status: 'running' },
       recentTools: tools,
+      sessionStatus: 'working',
     };
-
     this.reevaluateWatchdogAndEmit();
   }
 
@@ -65,11 +60,9 @@ export class StateStore {
       }
       return t;
     });
-
     const hasMatch = this.state.recentTools.some(
       (t) => t.id === result.id || (t.status === 'running' && t.toolName === 'unknown'),
     );
-
     const finalTools = hasMatch ? tools : [...tools, { ...result, status: 'success' as const }].slice(-MAX_RECENT_TOOLS);
 
     this.state = {
@@ -78,11 +71,9 @@ export class StateStore {
       activeToolCall: undefined,
       recentTools: finalTools,
     };
-
     this.reevaluateWatchdogAndEmit();
   }
 
-  /** Clear orphan activeToolCall when no matching tool_result arrives after timeout */
   clearActiveTool(): void {
     if (!this.state.activeToolCall) return;
     const tools = this.state.recentTools.map((t) => {
@@ -99,7 +90,6 @@ export class StateStore {
   }
 
   setTasks(tasks: SubTask[], currentTaskIndex: number): void {
-    // Latest TodoWrite is the authoritative task list — direct replace
     const prevById = new Map(this.state.tasks.map((t) => [t.id, t]));
     const prevByTitle = new Map(this.state.tasks.map((t) => [t.title, t]));
 
@@ -153,31 +143,6 @@ export class StateStore {
     this.state = { ...this.state, currentSessionPath: p };
   }
 
-  /** Called periodically from extension host to refresh stall state based on real elapsed time */
-  evaluateStall(elapsedMs: number, hasActiveTool: boolean): void {
-    const isStall = hasActiveTool
-      ? elapsedMs > STALL_WARN_ACTIVE_TOOL_MS
-      : elapsedMs > STALL_WARN_IDLE_MS;
-
-    const message = hasActiveTool
-      ? `Tool "${this.state.activeToolCall?.summary || 'unknown'}" running for ${Math.floor(elapsedMs / 1000)}s`
-      : `Agent idle for ${Math.floor(elapsedMs / 1000)}s — no tool running`;
-
-    this.state = {
-      ...this.state,
-      watchdog: {
-        ...this.state.watchdog,
-        stallDetected: isStall,
-        isNormal: !isStall && !this.state.watchdog.loopDetected,
-        warningMessage: isStall ? message : this.state.watchdog.warningMessage,
-      },
-    };
-
-    if (isStall) {
-      this.emit('watchdog_changed', { watchdog: this.state.watchdog });
-    }
-  }
-
   reset(id: string): void {
     this.state = { ...makeInitialState(id), currentSessionPath: this.state.currentSessionPath, availableSessions: this.state.availableSessions };
     this.emit('session_reset', {});
@@ -207,7 +172,6 @@ export class StateStore {
       watchdog: this.state.watchdog,
       lastUpdatedTime: this.state.lastUpdatedTime,
     });
-
     if (shouldAlert({ isLoop: this.state.watchdog.loopDetected, confidence: this.state.watchdog.loopConfidence })) {
       this.emit('watchdog_changed', { watchdog: this.state.watchdog });
     }
@@ -240,5 +204,6 @@ function makeInitialState(id: string): AgentSessionState {
     files: [],
     availableSessions: [],
     currentSessionPath: '',
+    sessionStatus: 'no_session',
   };
 }

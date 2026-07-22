@@ -70,12 +70,51 @@ body {
 .app-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   padding: 12px 12px 8px;
 }
 .app-title {
   font-size: 14px;
   font-weight: 700;
+  flex: 1;
+}
+
+/* Status badge */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.status-working {
+  background: rgba(0, 122, 204, 0.2);
+  color: var(--accent);
+  animation: status-pulse 2s ease-in-out infinite;
+}
+.status-done {
+  background: rgba(78, 201, 78, 0.15);
+  color: var(--success);
+}
+.status-interrupted {
+  background: rgba(244, 71, 71, 0.15);
+  color: var(--danger);
+}
+.status-waiting {
+  background: rgba(204, 167, 0, 0.15);
+  color: var(--warning);
+}
+.status-nosession {
+  background: transparent;
+  color: var(--fg-secondary);
+  opacity: 0.5;
+}
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
 }
 .session-id {
   font-size: 10px;

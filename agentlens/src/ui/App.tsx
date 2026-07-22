@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import type { AgentSessionState } from '../common/types';
+import type { AgentSessionState, SessionStatus } from '../common/types';
 import { TaskTree } from './components/TaskTree';
 import { ToolFeed } from './components/ToolFeed';
 import { WatchdogBanner } from './components/WatchdogBanner';
 import { TokenBar } from './components/TokenBar';
 import { FileTree } from './components/FileTree';
+import { StatusBadge } from './components/StatusBadge';
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: unknown): void;
@@ -20,6 +21,7 @@ const EMPTY: AgentSessionState = {
   watchdog: { isNormal: true, loopDetected: false, stallDetected: false, loopConfidence: 0, lastHeartbeat: 0 },
   tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
   files: [], availableSessions: [], currentSessionPath: '',
+  sessionStatus: 'no_session',
 };
 
 type Tab = 'tasks' | 'tools' | 'files';
@@ -49,6 +51,7 @@ export default function App() {
 
       <header className="app-header">
         <h1 className="app-title">AgentLens</h1>
+        <StatusBadge status={state.sessionStatus} />
         {state.sessionId && (
           <span className="session-id" title={state.sessionId}>
             {state.sessionId.slice(0, 8)}...
