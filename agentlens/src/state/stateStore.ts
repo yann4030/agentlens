@@ -1,10 +1,13 @@
-import type { AgentSessionState, ToolCallLog, SubTask, StateChange, TokenStats, FileNode, SessionInfo } from '../common/types';
+import type { AgentSessionState, ToolCallLog, SubTask, StateChange, FileNode, SessionInfo } from '../common/types';
 import { nowMs } from '../common/utils';
 import { LOOP_WINDOW_SIZE, MAX_RECENT_TOOLS } from '../common/constants';
 import { checkLoop, shouldAlert } from '../watchdog/loopDetector';
 import { buildWatchdogStatus } from '../watchdog/stallWatchdog';
 
 type StateListener = (change: StateChange) => void;
+
+const STALL_WARN_ACTIVE_TOOL_MS = 300_000; // 5 min
+const STALL_WARN_IDLE_MS = 60_000;          // 1 min
 
 export class StateStore {
   private state: AgentSessionState;
@@ -31,13 +34,13 @@ export class StateStore {
   }
 
   updateHeartbeat(): void {
+    const now = nowMs();
     this.state = {
       ...this.state,
-      lastUpdatedTime: nowMs(),
-      watchdog: { ...this.state.watchdog, lastHeartbeat: nowMs() },
+      lastUpdatedTime: now,
+      watchdog: { ...this.state.watchdog, lastHeartbeat: now },
     };
-    this.reevaluateWatchdog();
-    this.emit('heartbeat', { lastUpdatedTime: this.state.lastUpdatedTime });
+    this.emit('heartbeat', { lastUpdatedTime: now });
   }
 
   setActiveTool(tool: ToolCallLog): void {
@@ -45,7 +48,7 @@ export class StateStore {
     this.state = {
       ...this.state,
       lastUpdatedTime: nowMs(),
-      activeToolCall: tool,
+      activeToolCall: { ...tool, status: 'running' },
       recentTools: tools,
     };
 
@@ -64,7 +67,7 @@ export class StateStore {
       (t) => t.id === result.id || (t.status === 'running' && t.toolName === 'unknown'),
     );
 
-    const finalTools = hasMatch ? tools : [...tools, result].slice(-MAX_RECENT_TOOLS);
+    const finalTools = hasMatch ? tools : [...tools, { ...result, status: 'success' as const }].slice(-MAX_RECENT_TOOLS);
 
     this.state = {
       ...this.state,
@@ -128,6 +131,31 @@ export class StateStore {
 
   setCurrentSessionPath(p: string): void {
     this.state = { ...this.state, currentSessionPath: p };
+  }
+
+  /** Called periodically from extension host to refresh stall state based on real elapsed time */
+  evaluateStall(elapsedMs: number, hasActiveTool: boolean): void {
+    const isStall = hasActiveTool
+      ? elapsedMs > STALL_WARN_ACTIVE_TOOL_MS
+      : elapsedMs > STALL_WARN_IDLE_MS;
+
+    const message = hasActiveTool
+      ? `Tool "${this.state.activeToolCall?.summary || 'unknown'}" running for ${Math.floor(elapsedMs / 1000)}s`
+      : `Agent idle for ${Math.floor(elapsedMs / 1000)}s — no tool running`;
+
+    this.state = {
+      ...this.state,
+      watchdog: {
+        ...this.state.watchdog,
+        stallDetected: isStall,
+        isNormal: !isStall && !this.state.watchdog.loopDetected,
+        warningMessage: isStall ? message : this.state.watchdog.warningMessage,
+      },
+    };
+
+    if (isStall) {
+      this.emit('watchdog_changed', { watchdog: this.state.watchdog });
+    }
   }
 
   reset(id: string): void {

@@ -8,18 +8,20 @@ import { buildTaskTree } from './parser/taskExtractor';
 import { FileGraph } from './parser/fileGraph';
 import { StateStore } from './state/stateStore';
 import { SidebarProvider } from './views/sidebarProvider';
-import { createStallTimer } from './watchdog/stallWatchdog';
 import type { ToolCallEvent, SessionInfo } from './common/types';
 import * as path from 'path';
-import * as os from 'os';
-import { CLAUDE_PROJECTS_DIR } from './common/constants';
 
 let stateStore: StateStore;
 let tailStream: TailStream | null = null;
-let stallTimer: ReturnType<typeof createStallTimer> | null = null;
 let fileGraph = new FileGraph();
 let outputChannel: vscode.OutputChannel;
-let lastWatchdogAlert = { stall: false, loop: false };
+let lastWatchdogAlert = { stall: false, loop: false, toolRunning: false };
+let stallCheckInterval: NodeJS.Timeout | null = null;
+
+const STALL_CHECK_MS = 5000;
+const STALL_WARN_ACTIVE_TOOL_MS = 300_000; // 5 min — tool is running, be patient
+const STALL_WARN_IDLE_MS = 60_000;          // 1 min — nothing happening at all
+const STALL_CRITICAL_MS = 600_000;          // 10 min — really stuck
 
 export function activate(context: vscode.ExtensionContext) {
   stateStore = new StateStore();
@@ -69,39 +71,58 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(outputChannel);
 
-  stateStore.subscribe((change) => {
-    if (change.type === 'watchdog_changed') {
-      const w = stateStore.getState().watchdog;
-      if (w.loopDetected && !lastWatchdogAlert.loop) {
-        lastWatchdogAlert.loop = true;
-        vscode.window.showWarningMessage(`AgentLens: ${w.warningMessage || 'Loop detected!'}`, 'Dismiss');
-      }
-      if (w.stallDetected && !lastWatchdogAlert.stall) {
-        lastWatchdogAlert.stall = true;
-        vscode.window.showWarningMessage(`AgentLens: ${w.warningMessage || 'Agent stalled!'}`, 'Dismiss');
-      }
-      if (!w.loopDetected) lastWatchdogAlert.loop = false;
-      if (!w.stallDetected) lastWatchdogAlert.stall = false;
-    }
+  // Stall checker: does NOT inject heartbeat. Only evaluates real data.
+  stallCheckInterval = setInterval(() => {
+    checkForStall();
+  }, STALL_CHECK_MS);
+  context.subscriptions.push({ dispose: () => { if (stallCheckInterval) clearInterval(stallCheckInterval); } });
 
-    if (change.type === 'tokens_updated') {
-      const tokens = stateStore.getState().tokens;
-      const totalTokens = tokens.inputTokens + tokens.outputTokens;
-      if (totalTokens > 0 && totalTokens % 50_000 < 5000) {
-        outputChannel.appendLine(`[Tokens] ${totalTokens.toLocaleString()} total | input: ${tokens.inputTokens.toLocaleString()} | output: ${tokens.outputTokens.toLocaleString()} | cache: ${tokens.cacheReadTokens.toLocaleString()}`);
-      }
-    }
-  });
-
-  stallTimer = createStallTimer(() => {
-    stateStore.updateHeartbeat();
-  });
-  stallTimer.start();
-
-  refreshSessionList();
   startWatching();
+  refreshSessionList();
 
-  vscode.window.showInformationMessage('AgentLens activated — monitoring for Claude Code sessions.');
+  vscode.window.showInformationMessage('AgentLens activated');
+}
+
+function checkForStall(): void {
+  const state = stateStore.getState();
+  const elapsed = Date.now() - state.watchdog.lastHeartbeat;
+  const hasActiveTool = !!state.activeToolCall;
+
+  if (hasActiveTool && elapsed > STALL_WARN_ACTIVE_TOOL_MS && !lastWatchdogAlert.toolRunning) {
+    lastWatchdogAlert.toolRunning = true;
+    const minutes = Math.floor(elapsed / 60000);
+    vscode.window.showWarningMessage(
+      `AgentLens: "${state.activeToolCall!.summary}" has been running for ${minutes}min. May be stalled.`,
+      'Dismiss',
+    );
+  }
+
+  if (!hasActiveTool && elapsed > STALL_WARN_IDLE_MS && !lastWatchdogAlert.stall) {
+    lastWatchdogAlert.stall = true;
+    vscode.window.showWarningMessage(
+      `AgentLens: Agent idle for ${Math.floor(elapsed / 1000)}s. No tool running.`,
+      'Dismiss',
+    );
+  }
+
+  if (elapsed > STALL_CRITICAL_MS && !lastWatchdogAlert.toolRunning && !lastWatchdogAlert.stall) {
+    vscode.window.showErrorMessage(
+      `AgentLens: Agent completely unresponsive for ${Math.floor(elapsed / 60000)}min. Consider restarting.`,
+      'Restart Session',
+    );
+  }
+
+  // Reset flags when heartbeat recovers
+  if (elapsed < 5000) {
+    if (lastWatchdogAlert.stall) lastWatchdogAlert.stall = false;
+    if (lastWatchdogAlert.toolRunning) {
+      lastWatchdogAlert.toolRunning = false;
+      vscode.window.showInformationMessage('AgentLens: Tool completed, agent is back.');
+    }
+  }
+
+  // Force-update watchdog status for UI banner
+  stateStore.evaluateStall(elapsed, hasActiveTool);
 }
 
 function refreshSessionList(): void {
@@ -208,6 +229,7 @@ function processLine(line: string): void {
     }
   }
 
+  // Heartbeat from real data only
   stateStore.updateHeartbeat();
 
   if (result.tokens) stateStore.addTokens(result.tokens);
@@ -217,7 +239,6 @@ function processLine(line: string): void {
     const log = toolEventToLog(toolEvent);
     stateStore.setActiveTool(log);
 
-    // File graph: track edits and reads
     if (toolEvent.filePath) {
       const editTools = ['Write', 'Edit'];
       const readTools = ['Read'];
@@ -247,5 +268,5 @@ function processLine(line: string): void {
 
 export function deactivate(): void {
   if (tailStream) tailStream.stop();
-  if (stallTimer) stallTimer.stop();
+  if (stallCheckInterval) clearInterval(stallCheckInterval);
 }

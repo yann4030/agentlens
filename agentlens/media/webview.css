@@ -253,15 +253,47 @@ body {
   font-size: 12px;
 }
 .tool-item-active {
-  background: rgba(0, 122, 204, 0.2);
-  padding: 8px;
+  background: rgba(0, 122, 204, 0.15);
+  padding: 10px;
   margin-bottom: 4px;
   border-left: 3px solid var(--accent);
+  align-items: flex-start;
+}
+.tool-active-body {
+  flex: 1;
+  min-width: 0;
+}
+.tool-active-name {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+.tool-active-summary {
+  font-size: 11px;
+  opacity: 0.85;
+  word-break: break-all;
+  line-height: 1.4;
+  max-height: 40px;
+  overflow: hidden;
+}
+.tool-active-meta {
+  margin-top: 4px;
+}
+.tool-elapsed {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--warning);
+  font-weight: 600;
 }
 .tool-indicator {
-  width: 8px;
-  height: 8px;
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
+  margin-top: 4px;
+}
+.tool-indicator.pulse {
   background: var(--accent);
   animation: pulse 1s ease-in-out infinite;
 }
