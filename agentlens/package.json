@@ -6,7 +6,7 @@
   "publisher": "agentlens",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/agentlens"
+    "url": "https://github.com/yann4030/agentlens"
   },
   "engines": {
     "vscode": "^1.85.0"
