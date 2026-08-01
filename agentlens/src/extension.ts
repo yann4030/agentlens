@@ -14,6 +14,7 @@ let stateStore: StateStore;
 let tailStream: TailStream | null = null;
 let fileGraph = new FileGraph();
 let outputChannel: vscode.OutputChannel;
+let retryTimer: NodeJS.Timeout | null = null; // polls for new sessions when none active
 
 // ─── Thresholds (from VS Code settings) ──────────────
 
@@ -27,6 +28,7 @@ function cfg() {
     staleTodoWrite: c.get<number>('staleTodoWriteSeconds', 120) * 1000,
     watchdogNotifications: c.get<boolean>('watchdogNotificationsEnabled', true),
     loopDetection: c.get<boolean>('loopDetectionEnabled', true),
+    retryScanMs: c.get<number>('retryScanIntervalMs', 10_000),
   };
 }
 
@@ -46,6 +48,15 @@ export function activate(context: vscode.ExtensionContext) {
     fileGraph.reset();
     stateStore.reset('');
   }));
+  context.subscriptions.push(vscode.commands.registerCommand('agentlens.reset', () => {
+    outputChannel.appendLine('[Reset] Full reset triggered');
+    stopTail();
+    fileGraph.reset();
+    stateStore.reset('');
+    outputChannel.appendLine('[Reset] State cleared — restarting watch');
+    startWatching();
+    vscode.window.showInformationMessage('AgentLens: Full reset complete');
+  }));
   context.subscriptions.push(vscode.commands.registerCommand('agentlens.switchSession', async () => {
     const allFiles = listAllSessionFiles();
     if (allFiles.length === 0) {
@@ -60,6 +71,11 @@ export function activate(context: vscode.ExtensionContext) {
     if (picked) switchToSession(picked.detail);
   }));
   context.subscriptions.push(outputChannel);
+
+  // Workspace folder changes → re-scan
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => startWatching()),
+  );
 
   // Watchdog notification debounce
   let lastLoopAlert = 0;
@@ -93,11 +109,14 @@ export function activate(context: vscode.ExtensionContext) {
 
 function startWatching(): void {
   stopTail();
+  clearRetry();
 
   const sessionPath = findSessionForWorkspace();
   if (!sessionPath) {
     stateStore.reset('');
     stateStore.setSessionStatus('no_session');
+    outputChannel.appendLine('[Retry] No session found — will retry scan every ' + cfg().retryScanMs + 'ms');
+    scheduleRetry();
     return;
   }
 
@@ -167,6 +186,22 @@ function findSessionForWorkspace(): string | null {
 function stopTail(): void {
   if (tailStream) { tailStream.stop(); tailStream = null; }
   if (tailActivityTimer) { clearInterval(tailActivityTimer); tailActivityTimer = null; }
+  clearRetry();
+}
+
+function clearRetry(): void {
+  if (retryTimer) { clearInterval(retryTimer); retryTimer = null; }
+}
+
+function scheduleRetry(): void {
+  clearRetry();
+  retryTimer = setInterval(() => {
+    const sp = findSessionForWorkspace();
+    if (sp) {
+      outputChannel.appendLine('[Retry] Session appeared — starting watch');
+      startWatching();
+    }
+  }, cfg().retryScanMs);
 }
 
 function startTail(sp: string): void {
@@ -230,6 +265,11 @@ function processLine(line: string): void {
     const te = event.data as ToolCallEvent;
     stateStore.completeActiveTool(toolEventToLog(te));
   }
+
+  if (event.type === 'session_start') {
+    const data = event.data as Record<string, unknown>;
+    if (data.model) stateStore.setModel(data.model as string);
+  }
 }
 
 // ─── Activity monitor ────────────────────────────────
@@ -243,11 +283,17 @@ function startTailActivityCheck(sp: string): void {
     const age = getFileAge(sp);
     const s = stateStore.getState();
 
+    // File disappeared → rescan for a new session
+    if (!fs.existsSync(sp)) {
+      outputChannel.appendLine('[Activity] Session file gone — rescanning');
+      startWatching();
+      return;
+    }
+
+    // File is fresh → definitely working
     if (age < t.pollMs) {
       stateStore.setSessionStatus('working');
 
-      // Auto-clear stale tasks: file just became active, but last TodoWrite is older
-      // than the session itself. This means a new session started using the same file.
       const todoAge = s.lastTodoWriteAt ? Date.now() - s.lastTodoWriteAt : 0;
       if (s.tasks.length > 0 && todoAge > t.staleTodoWrite) {
         outputChannel.appendLine('[AutoClear] New session detected — clearing old tasks');
@@ -256,6 +302,14 @@ function startTailActivityCheck(sp: string): void {
 
       return;
     }
+
+    // Session completely stale → rescan for new sessions instead of just marking done
+    if (age > t.staleFileTimeout * 3) {
+      outputChannel.appendLine('[Activity] Session very stale — rescanning for new sessions');
+      startWatching();
+      return;
+    }
+
     if (hasRunningTasks(s)) { stateStore.setSessionStatus('working'); return; }
     if (age > t.idleTimeout && !s.activeToolCall) { stateStore.setSessionStatus('done'); return; }
     if (age > t.activeToolTimeout && s.activeToolCall) { stateStore.setSessionStatus('interrupted'); return; }

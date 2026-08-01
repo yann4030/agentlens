@@ -1,0 +1,16 @@
+.git
+.gitignore
+.vscode/**
+.vscodeignore
+node_modules/.cache
+src/**
+*.ts
+*.tsx
+!dist/**/*.d.ts
+tsconfig.json
+webpack.config.js
+.DS_Store
+*.map
+*.log
+*.vsix
+agentlens-*.vsix

@@ -19,6 +19,7 @@ export const TokenBar: React.FC<Props> = ({ tokens }) => {
         <span className="token-label">In: {fmt(tokens.inputTokens)}</span>
         <span className="token-label">Out: {fmt(tokens.outputTokens)}</span>
         {tokens.cacheReadTokens > 0 && <span className="token-label token-cache">Cache: {fmt(tokens.cacheReadTokens)}</span>}
+        {tokens.estimatedCost > 0 && <span className="token-label token-cost">${fmtCost(tokens.estimatedCost)}</span>}
       </div>
       {tokens.timeline.length >= 2 && <TokenSparkline timeline={tokens.timeline} />}
     </div>
@@ -50,4 +51,7 @@ function pct(v: number, total: number): number {
 }
 function fmt(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : n.toString();
+}
+function fmtCost(n: number): string {
+  return n >= 0.01 ? n.toFixed(2) : n.toFixed(4);
 }

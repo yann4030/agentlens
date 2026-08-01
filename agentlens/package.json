@@ -2,8 +2,12 @@
   "name": "agentlens",
   "displayName": "AgentLens",
   "description": "Real-time AI Agent monitor — task progress, tool feed, and watchdog alerts for Claude Code, Codex, Roo Code, and Cursor sessions.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "agentlens",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/agentlens"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -43,6 +47,10 @@
       {
         "command": "agentlens.switchSession",
         "title": "AgentLens: Switch Session"
+      },
+      {
+        "command": "agentlens.reset",
+        "title": "AgentLens: Full Reset"
       }
     ],
     "configuration": {
@@ -82,6 +90,11 @@
           "type": "boolean",
           "default": true,
           "description": "Detect tool-call loops (4 identical calls or alternating patterns)."
+        },
+        "agentlens.retryScanIntervalMs": {
+          "type": "number",
+          "default": 10000,
+          "description": "When no session is found, how often (ms) to rescan for new Claude Code sessions."
         }
       }
     }

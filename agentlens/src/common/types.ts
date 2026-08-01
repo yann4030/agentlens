@@ -53,6 +53,7 @@ export interface TokenStats {
   cacheReadTokens: number;
   cacheCreationTokens: number;
   timeline: TokenSnapshot[];
+  estimatedCost: number;
 }
 
 export interface TokenSnapshot {
@@ -64,6 +65,7 @@ export interface TokenSnapshot {
 
 export interface FileNode {
   path: string;
+  rawPath: string;
   editCount: number;
   lastEditedAt: number;
   relatedFiles: string[];
@@ -102,9 +104,19 @@ export interface AgentSessionState {
   sessionStatus: SessionStatus;
   lastTodoWriteAt: number;
   health: SessionHealth;
+  model?: string;
 }
 
 export interface StateChange {
   type: 'tasks_updated' | 'tool_started' | 'tool_ended' | 'heartbeat' | 'watchdog_changed' | 'session_reset' | 'tokens_updated' | 'files_updated' | 'sessions_list' | 'status_changed' | 'health_updated';
   partial: Partial<AgentSessionState>;
+}
+
+export interface CostRates {
+  [modelPattern: string]: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
 }

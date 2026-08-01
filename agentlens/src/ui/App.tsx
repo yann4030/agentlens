@@ -21,7 +21,7 @@ const EMPTY: AgentSessionState = {
   sessionId: '', projectName: '', startTime: 0, lastUpdatedTime: 0,
   currentTaskIndex: 0, tasks: [], recentTools: [],
   watchdog: { isNormal: true, loopDetected: false, stallDetected: false, loopConfidence: 0, lastHeartbeat: 0 },
-  tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, timeline: [] },
+  tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, timeline: [], estimatedCost: 0 },
   files: [], availableSessions: [], currentSessionPath: '',
   sessionStatus: 'no_session', lastTodoWriteAt: 0,
   health: { loopCount: 0, stallCount: 0, toolCallCount: 0, startTime: 0, lastToolTime: 0 },
@@ -48,6 +48,10 @@ export default function App() {
   const completedCount = state.tasks.filter((t) => t.status === 'completed').length;
   const totalTokens = state.tokens.inputTokens + state.tokens.outputTokens;
 
+  const handleReset = () => {
+    vscode.postMessage({ command: 'reset' });
+  };
+
   return (
     <div className="app">
       <WatchdogBanner watchdog={state.watchdog} />
@@ -60,6 +64,7 @@ export default function App() {
             {state.sessionId.slice(0, 8)}...
           </span>
         )}
+        <button className="reset-btn" onClick={handleReset} title="Full Reset">↻</button>
       </header>
 
       <div className="stats-bar">
@@ -96,7 +101,7 @@ export default function App() {
           <ToolFeed tools={state.recentTools} activeTool={state.activeToolCall} />
         )}
         {activeView === 'files' && (
-          <FileTree files={state.files} />
+          <FileTree files={state.files} vscode={vscode} />
         )}
         {activeView === 'insights' && (
           <div className="insights-panel">

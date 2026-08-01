@@ -14,6 +14,7 @@ export class FileGraph {
     } else {
       this.nodes.set(normalized, {
         path: normalized,
+        rawPath: filePath,
         editCount: 1,
         lastEditedAt: nowMs(),
         relatedFiles: [],
@@ -27,6 +28,7 @@ export class FileGraph {
     if (!this.nodes.has(normalized)) {
       this.nodes.set(normalized, {
         path: normalized,
+        rawPath: filePath,
         editCount: 0,
         lastEditedAt: nowMs(),
         relatedFiles: [],

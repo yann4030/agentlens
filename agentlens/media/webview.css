@@ -79,6 +79,27 @@ body {
   flex: 1;
 }
 
+/* Reset button */
+.reset-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg-secondary);
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+}
+.reset-btn:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
 /* Status badge */
 .status-badge {
   display: inline-flex;
@@ -627,6 +648,10 @@ body {
 .token-cache {
   color: #c586c0;
 }
+.token-cost {
+  color: var(--accent);
+  font-weight: 600;
+}
 
 /* Token Sparkline */
 .token-sparkline {
@@ -666,6 +691,7 @@ body {
   padding: 5px 8px;
   border-radius: 3px;
   font-size: 12px;
+  cursor: pointer;
 }
 .file-item:hover {
   background: var(--bg-secondary);

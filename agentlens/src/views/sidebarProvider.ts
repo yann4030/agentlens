@@ -39,6 +39,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       if (message.command === 'ready') {
         sendState();
       }
+      if (message.command === 'openFile' && message.filePath) {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (workspaceFolder) {
+          const uri = vscode.Uri.joinPath(workspaceFolder.uri, message.filePath);
+          vscode.window.showTextDocument(uri, { preview: true });
+        }
+      }
+      if (message.command === 'reset') {
+        vscode.commands.executeCommand('agentlens.reset');
+      }
     });
 
     sendState();

@@ -58,6 +58,13 @@ A colored bar below the stats line shows token usage:
 | `AgentLens: Refresh View` | Re-scans for session files and reloads |
 | `AgentLens: Clear History` | Clears all tasks/tools/files from history |
 | `AgentLens: Switch Session` | Manually pick which session file to watch |
+| `AgentLens: Full Reset` | Stops all watchers, clears all state, restarts from scratch |
+
+## Reset Button
+
+The sidebar header includes a **↻ Reset button** for quick access to the Full Reset function. This is useful when AgentLens gets stuck or you want to completely restart monitoring.
+
+Click the ↻ button in the top-right of the AgentLens sidebar header, or use `Ctrl+Shift+P` → `AgentLens: Full Reset`.
 
 ## Behavior Details
 

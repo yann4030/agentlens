@@ -1,8 +1,9 @@
-import type { AgentSessionState, ToolCallLog, SubTask, StateChange, FileNode, SessionInfo, SessionStatus } from '../common/types';
+import type { AgentSessionState, ToolCallLog, SubTask, StateChange, FileNode, SessionInfo, SessionStatus, TokenStats } from '../common/types';
 import { nowMs } from '../common/utils';
 import { LOOP_WINDOW_SIZE, MAX_RECENT_TOOLS } from '../common/constants';
 import { checkLoop, shouldAlert } from '../watchdog/loopDetector';
 import { buildWatchdogStatus } from '../watchdog/stallWatchdog';
+import { estimateCost } from '../common/costCalculator';
 
 type StateListener = (change: StateChange) => void;
 
@@ -41,6 +42,11 @@ export class StateStore {
     };
   }
 
+  setModel(model: string): void {
+    if (!model) return;
+    this.state = { ...this.state, model };
+  }
+
   setActiveTool(tool: ToolCallLog): void {
     const tools = [...this.state.recentTools, tool].slice(-MAX_RECENT_TOOLS);
     this.state = {
@@ -50,6 +56,7 @@ export class StateStore {
       recentTools: tools,
       sessionStatus: 'working',
     };
+    this.attachFileToCurrentTask(tool);
     this.reevaluateWatchdogAndEmit();
   }
 
@@ -71,6 +78,7 @@ export class StateStore {
       activeToolCall: undefined,
       recentTools: finalTools,
     };
+    this.attachFileToCurrentTask(result);
     this.reevaluateWatchdogAndEmit();
   }
 
@@ -108,6 +116,7 @@ export class StateStore {
         completedAt: t.status === 'completed'
           ? (prev?.completedAt || t.completedAt || nowMs())
           : (prev?.completedAt || t.completedAt),
+        relatedFiles: prev?.relatedFiles || t.relatedFiles || [],
       };
     });
 
@@ -127,16 +136,21 @@ export class StateStore {
       ts: nowMs(), input: t.input, output: t.output, cacheRead: t.cacheRead,
     };
     const timeline = [...this.state.tokens.timeline, snap].slice(-MAX_TIMELINE);
-    this.state = {
-      ...this.state,
-      tokens: {
-        inputTokens: this.state.tokens.inputTokens + t.input,
-        outputTokens: this.state.tokens.outputTokens + t.output,
-        cacheReadTokens: this.state.tokens.cacheReadTokens + t.cacheRead,
-        cacheCreationTokens: this.state.tokens.cacheCreationTokens + t.cacheCreation,
-        timeline,
-      },
+    const tokens: TokenStats = {
+      inputTokens: this.state.tokens.inputTokens + t.input,
+      outputTokens: this.state.tokens.outputTokens + t.output,
+      cacheReadTokens: this.state.tokens.cacheReadTokens + t.cacheRead,
+      cacheCreationTokens: this.state.tokens.cacheCreationTokens + t.cacheCreation,
+      timeline,
+      estimatedCost: estimateCost(
+        this.state.tokens.inputTokens + t.input,
+        this.state.tokens.outputTokens + t.output,
+        this.state.tokens.cacheReadTokens + t.cacheRead,
+        this.state.tokens.cacheCreationTokens + t.cacheCreation,
+        this.state.model,
+      ),
     };
+    this.state = { ...this.state, tokens };
     this.emit('tokens_updated', { tokens: this.state.tokens });
   }
 
@@ -175,6 +189,22 @@ export class StateStore {
   }
 
   // --- internal ---
+
+  private attachFileToCurrentTask(tool: ToolCallLog): void {
+    if (!tool.filePath) return;
+    const idx = this.state.tasks.findIndex((t) => t.status === 'in_progress');
+    if (idx < 0) return;
+    const task = this.state.tasks[idx];
+    const existing: string[] = task.relatedFiles || [];
+    const fp: string = tool.filePath;
+    if (!existing.includes(fp)) {
+      const tasks = this.state.tasks.map((t, i) =>
+        i === idx ? { ...t, relatedFiles: [...existing, fp] } : t,
+      );
+      this.state = { ...this.state, tasks };
+      this.emit('tasks_updated', { tasks: this.state.tasks, currentTaskIndex: this.state.currentTaskIndex });
+    }
+  }
 
   private reevaluateWatchdog(): void {
     const window = this.state.recentTools.slice(-LOOP_WINDOW_SIZE);
@@ -226,7 +256,7 @@ function makeInitialState(id: string): AgentSessionState {
       loopConfidence: 0,
       lastHeartbeat: nowMs(),
     },
-    tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, timeline: [] },
+    tokens: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, timeline: [], estimatedCost: 0 },
     files: [],
     availableSessions: [],
     currentSessionPath: '',
