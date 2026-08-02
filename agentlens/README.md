@@ -4,6 +4,8 @@
 
 AgentLens is a VS Code extension that mirrors what Claude Code (and Codex, Roo Code, Cursor) is doing in real time. A sidebar shows which tasks are running, which are done, and what tools the agent is using.
 
+[![Sponsor](https://img.shields.io/static/v1?label=Sponsor&message=%E2%9D%A4&logo=GitHub+Sponsors&color=EA4AAA)](https://github.com/sponsors/yann4030)
+
 [Features](#features) · [Installation](#installation) · [Commands](#commands) · [Configuration](#configuration) · [Architecture](#architecture) · [Contributing](#contributing)
 
 ---
@@ -194,6 +196,16 @@ This scans all active sessions and reports:
 - Tool call state (active tools, orphan detection)
 - Time since last event
 - Any issues found
+
+---
+
+## Support
+
+If AgentLens saves you time and you want to support its development, consider sponsoring:
+
+[![Sponsor](https://img.shields.io/static/v1?label=Sponsor&message=%E2%9D%A4&logo=GitHub+Sponsors&color=EA4AAA)](https://github.com/sponsors/yann4030)
+
+Your sponsorship helps keep AgentLens free and actively maintained.
 
 ---
 
