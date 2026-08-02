@@ -4,7 +4,16 @@ All notable changes to AgentLens will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [1.1.0] - Unreleased
+## [1.1.1] - 2026-08-02
+
+### Changed
+- Rewrite all documentation as bilingual (EN/CN) / 所有文档改为中英双语
+
+### Fixed
+- Suppress misleading "Recent activity" tool calls display when tasks are empty — only show real TodoWrite tasks / 任务为空时隐藏误导性的"最近活动"工具调用，只显示真实的 TodoWrite 任务
+- Add `[TodoWrite]` debug log in Output panel to help diagnose task parsing issues / 在 Output 面板添加 [TodoWrite] 调试日志
+
+## [1.1.0] - 2026-08-02
 
 ### Added
 - **Full Reset Command** (`AgentLens: Full Reset`): Stops all watchers, clears state (file graph + session state), restarts from scratch. Accessible via command palette and the ↻ button in the sidebar header.

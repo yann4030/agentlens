@@ -2,7 +2,7 @@
   "name": "agentlens",
   "displayName": "AgentLens",
   "description": "Real-time AI Agent monitor — task progress, tool feed, and watchdog alerts for Claude Code, Codex, Roo Code, and Cursor sessions.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "publisher": "agentlens",
   "repository": {
     "type": "git",
