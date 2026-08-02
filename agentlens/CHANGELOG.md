@@ -4,6 +4,12 @@ All notable changes to AgentLens will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.1.2] - 2026-08-02
+
+### Fixed
+- Fix workspace matching for non-ASCII paths (Chinese characters) — now uses project folder name matching instead of full path comparison / 修复非 ASCII 路径（中文）的工作区匹配问题，改用项目文件夹名匹配
+- Add detailed session matching logs for debugging / 添加详细的会话匹配日志用于调试
+
 ## [1.1.1] - 2026-08-02
 
 ### Changed

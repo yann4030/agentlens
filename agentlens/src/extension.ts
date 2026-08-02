@@ -154,14 +154,33 @@ function findSessionForWorkspace(): string | null {
   if (!workspaceCwd) return findLatestSessionFile();
 
   const normalizedWorkspace = normalizePath(workspaceCwd);
+  // Extract the project folder name (last segment) to handle encoding issues with non-ASCII paths
+  const workspaceProjectName = normalizedWorkspace.split('/').pop() || '';
+  outputChannel.appendLine(`[Match] workspace=${workspaceCwd} project=${workspaceProjectName}`);
+
+  const allFiles = listAllSessionFiles();
+  outputChannel.appendLine(`[Match] Total session files found: ${allFiles.length}`);
+  for (const f of allFiles) {
+    outputChannel.appendLine(`[Match] session: ${f}`);
+  }
 
   // Find ALL sessions matching this workspace, return the most recently modified
+  // Use project folder name match to handle encoding issues with non-ASCII paths
   let best: string | null = null;
   let bestMtime = 0;
 
   for (const f of listAllSessionFiles()) {
     const cwd = extractCwdFromSession(f);
-    if (cwd && normalizePath(cwd) === normalizedWorkspace) {
+    const normCwd = cwd ? normalizePath(cwd) : null;
+    // Extract project folder name from session cwd
+    const sessionProjectName = normCwd ? normCwd.split('/').pop() || '' : '';
+
+    // Match: exact path match OR project folder names match
+    const isMatch = normCwd === normalizedWorkspace ||
+      (sessionProjectName && sessionProjectName === workspaceProjectName);
+
+    if (cwd && isMatch) {
+      outputChannel.appendLine(`[Match] FOUND (${normCwd === normalizedWorkspace ? 'exact' : 'project-name'}): ${f} cwd=${cwd} project=${sessionProjectName}`);
       try {
         const mtime = fs.statSync(f).mtimeMs;
         if (mtime > bestMtime) {
@@ -169,6 +188,8 @@ function findSessionForWorkspace(): string | null {
           best = f;
         }
       } catch { /* skip */ }
+    } else if (cwd) {
+      outputChannel.appendLine(`[Match] skip: ${f} project=${sessionProjectName} !== ${workspaceProjectName}`);
     }
   }
 
@@ -347,7 +368,8 @@ function extractCwdFromSession(fp: string): string | null {
   if (!fs.existsSync(fp)) return null;
   const content = fs.readFileSync(fp, 'utf-8');
   const lines = content.split('\n');
-  for (let i = 0; i < Math.min(lines.length, 10); i++) {
+  // Scan first 100 lines to find cwd — session metadata appears anywhere in the file
+  for (let i = 0; i < Math.min(lines.length, 100); i++) {
     try { const d = JSON.parse(lines[i]); if (d.cwd) return d.cwd; } catch { /* skip */ }
   }
   return null;
