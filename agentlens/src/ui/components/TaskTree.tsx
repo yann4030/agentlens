@@ -13,7 +13,9 @@ export const TaskTree: React.FC<Props> = ({ tasks, currentTaskIndex, sessionStat
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   if (tasks.length === 0) {
-    return <EmptyState status={sessionStatus} activeTool={activeTool} recentTools={recentTools} />;
+    // Suppress recent activity display when tasks are empty — it's misleading.
+    // The real tasks come from TodoWrite, not from internal tool calls.
+    return <EmptyState status={sessionStatus} activeTool={undefined} recentTools={[]} />;
   }
 
   const toggle = (id: string) => {

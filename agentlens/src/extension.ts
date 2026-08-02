@@ -255,6 +255,7 @@ function processLine(line: string): void {
 
     const tasks = extractTasksFromToolEvent(te);
     if (tasks) {
+      outputChannel.appendLine(`[TodoWrite] ${tasks.length} tasks parsed: ${tasks.map(t => `"${t.title}"(${t.status})`).join(', ')}`);
       const cs = stateStore.getState();
       const result = buildTaskTree(tasks, cs.tasks);
       stateStore.setTasks(result.tasks, result.currentTaskIndex);
